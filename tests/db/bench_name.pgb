@@ -1,0 +1,4 @@
+\set g random(1, 6)
+\set s random(1, 3)
+\set k random(1, 2)
+select t.bench_name(:g, :s, :k);

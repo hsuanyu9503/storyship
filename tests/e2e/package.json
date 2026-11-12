@@ -1,0 +1,18 @@
+{
+  "name": "story-friends-e2e",
+  "private": true,
+  "description": "本機三端端對端測試（PostgreSQL＋模擬 Supabase API）",
+  "scripts": {
+    "bundle": "mkdir -p .cache && echo \"export { createClient } from '@supabase/supabase-js';\" > .cache/sb-entry.js && echo \"import Q from 'qrcode'; export default Q;\" > .cache/qr-entry.js",
+    "shim": "node shim.js",
+    "test": "node e2e.js",
+    "vendor": "npm run -s bundle && esbuild .cache/sb-entry.js --bundle --format=esm --minify --legal-comments=eof --outfile=../../js/vendor/supabase-js-2.45.4.js --log-level=warning && esbuild .cache/qr-entry.js --bundle --format=esm --minify --legal-comments=eof --outfile=../../js/vendor/qrcode-1.5.4.js --log-level=warning"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "2.45.4",
+    "esbuild": "0.24.0",
+    "jsonwebtoken": "9.0.2",
+    "pg": "8.13.1",
+    "qrcode": "1.5.4"
+  }
+}

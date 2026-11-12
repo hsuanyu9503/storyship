@@ -1,0 +1,11 @@
+{
+  "name": "story-friends",
+  "private": true,
+  "description": "國小六年級國語「故事找朋友」三端互動教學網站（GitHub Pages＋Supabase）",
+  "scripts": {
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:db": "bash tests/db/run.sh",
+    "test:concurrency": "bash tests/db/concurrency.sh",
+    "serve": "python3 -m http.server 8080"
+  }
+}
