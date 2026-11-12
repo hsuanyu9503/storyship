@@ -100,3 +100,29 @@ test('所有操作都不修改原本的資料（避免畫面與待儲存資料�
   M.deleteCategory(r.data, r.id);
   assert.equal(JSON.stringify(r.data), before);
 });
+
+test('小組：共同特色（理由）— 有效分類缺少理由時不能提交，並指出分類', () => {
+  let r = M.addCategory(M.emptyBoard(), () => '11111111-1111-4111-8111-111111111111'); const a = r.id;
+  r = M.addCategory(r.data, () => '22222222-2222-4222-8222-222222222222'); const b = r.id;
+  r = M.addCategory(r.data, () => '33333333-3333-4333-8333-333333333333');   // 空分類
+  let d = r.data;
+  assert.equal(a, '11111111-1111-4111-8111-111111111111', '可注入 UUID 產生器（小組分類 id）');
+  for (const c of cards.slice(0, 4)) d = M.moveCard(d, c.id, a);
+  for (const c of cards.slice(4)) d = M.moveCard(d, c.id, b);
+  d = M.renameCategory(M.renameCategory(d, a, '會魔法'), b, '找答案');
+  let p = M.problems(d, cards, { requireReason: true });
+  assert.deepEqual(M.problemMessages(p), ['請寫下「會魔法」的共同特色。', '請寫下「找答案」的共同特色。']);
+  assert.ok(M.problems(d, cards).complete, '個人分類不檢查理由');
+  d = M.setReason(M.setReason(d, a, '都有魔法'), b, '  ');
+  p = M.problems(d, cards, { requireReason: true });
+  assert.deepEqual(M.problemMessages(p), ['請寫下「找答案」的共同特色。'], '只有空白不算填寫');
+  d = M.setReason(d, b, '主角都在找答案');
+  assert.ok(M.problems(d, cards, { requireReason: true }).complete, '空分類不需要理由');
+  assert.equal(M.setReason(d, a, '字'.repeat(200)).categories[0].reason.length, M.MAX_REASON);
+});
+
+test('小組：normalize 保留理由；sameBoard 會比較理由', () => {
+  const d = M.normalize({ categories: [{ id: 'x', no: 1, name: 'n', reason: '原因' }], placements: {} }, cards);
+  assert.equal(d.categories[0].reason, '原因');
+  assert.ok(!M.sameBoard(d, M.setReason(d, 'x', '別的原因')));
+});

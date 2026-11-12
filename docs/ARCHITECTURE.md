@@ -113,7 +113,9 @@ sessions ─┬─ session_state            教師控制的課堂狀態＋已公
 
 | 情境 | 機制 |
 |---|---|
-| 同組多人寫入 | 每個 `group_*` RPC 先 `SELECT … FOR UPDATE` 鎖住該組 `groups` 列，同組寫入在伺服器依序執行 |
+| 同組多人寫入 | 每個 `group_*` RPC 先以 `FOR SHARE` 讀 `session_state`、再 `SELECT … FOR UPDATE` 鎖住該組 `groups` 列，同組寫入在伺服器依序執行（Phase 3 起統一此鎖定順序，見 `PHASE3.md`） |
+| 重送同一操作 | 新增分類帶前端 UUID（重送回傳原結果、已刪除的不重建）；移動／改字已是相同結果時回傳 `unchanged` |
+| 教師暫停／結束時同時有學生操作 | 教師以 `FOR UPDATE` 鎖 `session_state`：進行中的學生操作先完成並被快照包含，之後的被拒絕 |
 | 兩人同時移動同一張卡 | `group_move_card(…, p_expected_rev)`：版本不符回傳 `STALE`＋最新歸屬；拖曳期間可持有 `card:<id>` 鎖，他人移動回傳 `LOCKED` |
 | 兩人同時改同一名稱／理由 | 進入輸入框時取得 `name:<id>`／`reason:<id>` 鎖；他人寫入回傳 `LOCKED`；另以 `name_rev`／`reason_rev` 拒絕舊版本 |
 | 操作中途斷線 | 鎖 15 秒逾時（前端需每 5 秒續約）；逾時後斷線者的舊版本寫入仍因版本不符被拒絕，不會回溯 |
@@ -154,7 +156,9 @@ sessions ─┬─ session_state            教師控制的課堂狀態＋已公
 | 畫面元件：故事卡、閱讀視窗、未分類區、分類群組、拖曳／點選移動、命名 | `js/lib/board-view.js` |
 | 03 學生端控制器（自動儲存、提交、鎖定） | `js/student/personal.js` |
 
-Phase 3 小組共作沿用 `board-model.js`、`board-view.js`，只替換資料來源與 `onChange` 的處理（見 `PHASE2.md` 第九節）。
+| 04 學生端控制器（操作佇列、樂觀顯示、操作鎖、離線） | `js/student/group.js` |
+
+Phase 3 小組共作沿用 `board-model.js`、`board-view.js`，只替換資料來源與 `onChange` 的處理（見 `PHASE3.md` 第四節）。
 
 ## 6. 資料庫與部署需求
 
@@ -196,6 +200,6 @@ Phase 3 小組共作沿用 `board-model.js`、`board-view.js`，只替換資料�
 
 **後續 Phase**：
 * Phase 2：學生個人分類操作畫面（拖曳／點選移動、命名、自動儲存、提交）、教師進度與鎖定。✅ 已完成（`PHASE2.md`）。
-* Phase 3：小組共作畫面（左側個人快照面板、右側共同工作區、鎖的取得與續約、衝突提示）、教師單組檢視。後端已完成。
+* Phase 3：小組共作畫面（左側個人快照面板、右側共同工作區、鎖的取得與續約、衝突提示）、教師單組檢視。✅ 已完成（`PHASE3.md`）。
 * Phase 4：05 雙組比較與故事追蹤、07 分類與小說要素對照、句型鷹架（投影資料格式與教師端控制）。
 * Phase 5：全流程實機多人測試、版面優化、正式素材整合。

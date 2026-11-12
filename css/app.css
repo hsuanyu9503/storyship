@@ -310,3 +310,70 @@ body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 .st-steps { margin: 1cqw 0 0; padding: 0; list-style: none; counter-reset: st; display: flex; flex-direction: column; gap: 1.4cqw; text-align: left; }
 .st-steps li { counter-increment: st; font-size: 3.4cqw; font-weight: 700; display: flex; align-items: center; gap: 1.6cqw; }
 .st-steps li::before { content: counter(st); width: 5cqw; height: 5cqw; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 2.8cqw; }
+
+/* ---------- Phase 3：小組共作 ---------- */
+.bd-reason-wrap { margin-top: .55rem; display: flex; flex-direction: column; gap: .25rem; }
+.bd-reason-label { font-size: .85rem; color: var(--muted); font-weight: 700; }
+.bd-reason { width: 100%; font: inherit; font-size: 1.02rem; line-height: 1.5; padding: .45em .6em; min-height: 3.2em; resize: vertical;
+  border: 1px solid transparent; background: #f5f6f4; border-radius: 8px; }
+.bd-reason:focus { border-color: var(--accent); background: #fff; outline: none; }
+.bd-reason-ro { margin: 0; font-size: 1.02rem; line-height: 1.5; } .bd-reason-ro.temp { color: var(--muted); }
+.bd-field-locked { background: #f1f1ec !important; color: var(--muted); cursor: not-allowed; }
+.bd-lock { font-size: .8rem; color: var(--warn); white-space: nowrap; }
+.sc-locked { opacity: .7; }
+.sc-grip-locked { cursor: not-allowed; background: var(--warn-soft) !important; color: var(--warn) !important; }
+.sc-grip-locked .sc-grip-label { font-size: .65rem; text-align: center; line-height: 1.2; }
+.bd-del:disabled { opacity: .3; }
+
+/* 窄的工作區（左側個人面板展開、直向平板）：未分類改為上方橫向素材列，分類區保有主要空間 */
+.bd.bd-adaptive { container-type: inline-size; }
+@container (max-width: 880px) {
+  .bd-adaptive .bd-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .bd-adaptive .bd-left { border-right: none; border-bottom: 1px solid var(--line); }
+  .bd-adaptive .bd-left .bd-scroll { overflow-x: auto; overflow-y: hidden; padding-bottom: .6rem; }
+  .bd-adaptive .bd-unplaced-list { display: flex; gap: .55rem; }
+  .bd-adaptive .bd-unplaced-list .sc { flex: none; width: 250px; }
+  .bd-adaptive .bd-unplaced-list .sc-img { width: 64px; height: 50px; }
+  .bd-adaptive .bd-unplaced-list .sc-sum { -webkit-line-clamp: 2; font-size: .85rem; }
+  .bd-adaptive.bd-all-placed .bd-left .bd-scroll { display: none; }
+}
+
+/* 個人參考面板（唯讀、單欄） */
+.bd.bd-panel { height: 100%; }
+.bd-panel .bd-count { display: none; }
+.bd-panel .bd-body { display: flex; flex-direction: column; overflow-y: auto; }
+.bd-panel .bd-left, .bd-panel .bd-right { flex: none; min-height: auto; }
+.bd-panel .bd-right { order: -1; }
+.bd-panel .bd-scroll { overflow: visible; flex: none; }
+.bd-panel .bd-left { border-right: none; border-top: 1px solid var(--line); }
+.bd-panel.bd-all-placed .bd-left { display: none; }
+.bd-panel .bd-cat-body { grid-template-columns: 1fr; }
+.bd-panel .bd-unplaced-list .sc-sum { display: none; }
+.bd-panel .bd-unplaced-list .sc-img { width: 52px; height: 40px; }
+.bd-panel .bd-unplaced-list .placeholder span { display: none; }
+.bd-panel .bd-footer { display: none; }
+
+.gw { display: flex; height: 100vh; height: 100dvh; min-height: 0; }
+.gw-panel { flex: none; width: 52px; display: flex; flex-direction: column; background: #eef1ec; border-right: 1px solid var(--line); }
+.gw-panel.open { width: 29%; min-width: 280px; }
+.gw-toggle { border: none; border-radius: 0; background: transparent; padding: .8rem .2rem; min-height: 120px; font-weight: 700; color: var(--accent);
+  writing-mode: vertical-rl; letter-spacing: .2em; font-size: 1.02rem; }
+.gw-panel.open .gw-toggle { writing-mode: horizontal-tb; letter-spacing: 0; min-height: 48px; text-align: left; padding: .6rem 1rem; border-bottom: 1px solid var(--line); }
+.gw-panel-body { flex: 1; min-height: 0; overflow: hidden; }
+.gw-panel-body > .bd { border-right: none; }
+.gw-empty { padding: 1rem; color: var(--muted); }
+.gw-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.gw-main > .bd { flex: 1; height: auto; min-height: 0; }
+.gw-backdrop { display: none; }
+@media (orientation: portrait), (max-width: 900px) {
+  .gw-panel.open { position: fixed; left: 0; top: 0; bottom: 0; width: min(86vw, 420px); z-index: 40; box-shadow: 4px 0 24px rgba(0,0,0,.18); }
+  .gw-panel.open + .gw-backdrop { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 39; }
+  .gw-panel.open ~ .gw-main { margin-left: 52px; }
+}
+.gw-done { text-align: center; }
+
+/* 教師端：小組進度 */
+.gp-table td, .gp-table th { vertical-align: middle; }
+.gp-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.gp-members { font-size: .85em; color: var(--muted); }
+.bd-panel .bd-col-head { display: none; }

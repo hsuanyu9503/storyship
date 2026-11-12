@@ -8,7 +8,7 @@
 
 技術：GitHub Pages（靜態網站，無建置步驟）＋ Supabase（PostgreSQL、RPC、Realtime）。
 
-## 目前進度：Phase 2 個人分類
+## 目前進度：Phase 3 小組共作
 
 | 項目 | 狀態 |
 |---|---|
@@ -20,7 +20,8 @@
 | 個人分類、小組共作的資料庫與 RPC（版本檢查、操作鎖、提交、解鎖、快照） | ✅ 後端完成 |
 | 03 學生個人分類工作區（閱讀、自由分類、拖曳與點選移動、命名、自動儲存、提交）（Phase 2） | ✅ |
 | 03 教師進度、查看個人成果、暫停／恢復、結束並鎖定快照（Phase 2） | ✅ |
-| 小組共作畫面（Phase 3） | ⏳ |
+| 04 小組共作工作區（個人參考面板、多人即時同步、卡片與欄位操作鎖、共同特色、提交）（Phase 3） | ✅ |
+| 04 教師監控、單組檢視、暫停、重新開放、結束並保存各組成果（Phase 3） | ✅ |
 | 05 成果比較、07 分類與小說要素對照（Phase 4） | ⏳ |
 
 驗證範圍與尚未在正式 Supabase 上驗證的項目，請見 [`docs/TESTING.md`](docs/TESTING.md)。
@@ -31,6 +32,7 @@
 * [`docs/DEPLOY.md`](docs/DEPLOY.md)：Supabase 設定、GitHub Pages 部署、上課流程、更換素材、資料保存
 * [`docs/TESTING.md`](docs/TESTING.md)：自動化測試、驗證結果、部署後手動驗收步驟
 * [`docs/PHASE2.md`](docs/PHASE2.md)：Phase 2 交付說明（升級 SQL、測試結果、實機驗收清單、Phase 3 沿用說明）
+* [`docs/PHASE3.md`](docs/PHASE3.md)：Phase 3 交付說明（升級 SQL、同步與衝突設計、多人測試結果、實機驗收清單、Phase 4 資料結構）
 
 ## 目錄
 
@@ -46,6 +48,7 @@ supabase/migrations/    資料庫（001 資料表、002 RPC、003 權限）
 supabase/seed/          佔位教學素材
 supabase/setup/         新增教師帳號
 supabase/rollback/      退回前一版時使用
+supabase/checks/        升級後檢查（verify.sql）
 tests/unit/ tests/db/ tests/e2e/
 ```
 

@@ -76,9 +76,14 @@ export function taskProjection() {
   return { screen: 'task', title: TEXT.activity, text: TEXT.task };
 }
 
+// 04 後段：教師切換的整理提醒（同一環節的子畫面）
+export function groupWrapProjection() {
+  return { screen: 'instruction', title: '整理並提交', text: TEXT.groupWrap };
+}
+
 export function instructionProjection(phaseId) {
   if (phaseId === '03') return { screen: 'instruction', title: '我的故事分類', text: '', items: TEXT.personalSteps };
-  if (phaseId === '04') return { screen: 'instruction', title: '故事找朋友：小組共作', text: TEXT.group };
+  if (phaseId === '04') return { screen: 'instruction', title: TEXT.groupTitle, text: '', items: TEXT.groupSteps };
   return { screen: 'instruction', title: '', text: '' };
 }
 
