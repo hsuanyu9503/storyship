@@ -6,6 +6,8 @@ import { PHASES, phaseById, nextPhase, prevPhase, totalMinutes } from '../lib/ph
 import * as P from '../lib/projection.js';
 import { renderProjection } from '../lib/render-projection.js';
 import { qrDataUrl, joinUrl } from '../lib/qr.js';
+import * as M from '../lib/board-model.js';
+import { createBoardView } from '../lib/board-view.js';
 
 const root = document.getElementById('app');
 const client = configured ? makeClient('teacher') : null;
@@ -22,6 +24,7 @@ const S = {
   personal: { boards: 0, submitted: 0, snapshots: 0 },
   sync: null,
   genrePreview: null, // 第六環節：教師私下預覽中的類型 index（不同步）
+  ppOpen: new Set(),  // 第三環節：展開詳細進度的組別
   busy: false,
 };
 
@@ -173,8 +176,8 @@ async function loadLive(sessionId) {
     client.from('session_state').select('*').eq('session_id', sessionId).single(),
     client.from('groups').select('*').eq('session_id', sessionId).order('number'),
     client.from('participants').select('id,group_id,seat_label,status,joined_at,last_seen_at').eq('session_id', sessionId).order('joined_at'),
-    client.from('personal_boards').select('participant_id,submitted_at').eq('session_id', sessionId),
-    client.from('personal_snapshots').select('participant_id,is_complete').eq('session_id', sessionId),
+    client.from('personal_boards').select('participant_id,rev,updated_at,submitted_at,data').eq('session_id', sessionId),
+    client.from('personal_snapshots').select('participant_id,is_complete,submitted,data,taken_at').eq('session_id', sessionId),
   ]);
   for (const r of [st, groups, people, boards, snaps]) if (r.error) throw Object.assign(new Error(r.error.message), { code: 'NETWORK' });
   S.pub = pub;
@@ -187,6 +190,9 @@ async function loadLive(sessionId) {
     snapshots: snaps.data.length,
     incomplete: new Set(snaps.data.filter((s) => !s.is_complete).map((s) => s.participant_id)),
     submittedSet: new Set(boards.data.filter((b) => b.submitted_at).map((b) => b.participant_id)),
+    byId: new Map(boards.data.map((b) => [b.participant_id, b])),
+    snapById: new Map(snaps.data.map((x) => [x.participant_id, x])),
+    digest: boards.data.map((b) => b.participant_id.slice(0, 4) + b.rev + (b.submitted_at ? 's' : '')).sort().join(','),
   };
   const sess = await client.from('sessions').select('*').eq('id', sessionId).single();
   if (!sess.error) S.session = sess.data;
@@ -237,6 +243,8 @@ async function publish(phase, sub, projection, { lock = false } = {}) {
 
 async function goPhase(phase) {
   if (!phase) return;
+  // 結束個人分類：從 03 以前前往 04 以後，先讓教師確認未完成人數（不會強制阻止）
+  if (S.state.phase <= '03' && phase >= '04' && S.personal.snapshots === 0 && !(await confirmEndPersonal())) return;
   const remembered = recallProjection(phase);
   const def = P.defaultProjection(phase, S.content);
   const { sub, projection } = remembered || def;
@@ -269,9 +277,14 @@ function renderAll(force = false) {
   if (changed('steps', [st.phase, S.session.status])) renderSteps();
   if (changed('panel', [st.rev, S.session.join_open, S.session.status, S.genrePreview,
     S.groups.map((g) => [g.status, g.board_rev]), S.people.length, onlineCount(S.people),
-    S.personal.boards, S.personal.submitted])) renderPanel();
+    S.personal.boards, S.personal.submitted, S.personal.digest, S.personal.snapshots, [...S.ppOpen],
+    S.state.phase === '03' ? S.people.map((p) => [p.id, p.group_id, p.status, isOnline(p)]) : 0])) renderPanel();
   if (changed('previews', [S.pub?.rev, S.genrePreview, st.phase])) renderPreviews();
   renderRoster();
+}
+
+function isOnline(p) {
+  return p.status === 'active' && Date.now() - new Date(p.last_seen_at).getTime() < ONLINE_MS;
 }
 
 function onlineCount(list) {
@@ -429,14 +442,7 @@ const PANELS = {
       h('p.muted', '提醒：網頁無法遠端強制學生裝置全螢幕；學生按「進入探索模式」時會在支援的瀏覽器請求全螢幕，不支援時自動使用網站專注模式。'));
   },
 
-  '03': () => {
-    const active = S.people.filter((p) => p.status === 'active');
-    return h('div',
-      h('p', `個人分類：已開始 ${S.personal.boards} 人、已提交 ${S.personal.submitted} 人 / 共 ${active.length} 人`),
-      h('p.muted', '進入第四環節時，系統會為每位學生建立唯讀快照（未完成者也保留已儲存部分，並標示未完成）。'),
-      h('p.muted', '（學生個人分類操作畫面將於 Phase 2 完成。）'),
-      h('button.primary', { onclick: () => goPhase('04') }, '進入第四環節：小組共作 →'));
-  },
+  '03': () => panelPersonal(),
 
   '04': () => h('div',
     h('table.tbl', h('thead', h('tr', h('th', '組別'), h('th', '狀態'), h('th', '版本'), h('th', ''))),
@@ -480,6 +486,109 @@ const PANELS = {
   '99': () => h('div', h('p', '投影顯示結束畫面。'),
     S.session.status === 'ended' ? h('p.muted', '場次已結束。') : h('button.danger', { onclick: endSession }, '結束場次（學生不能再修改）')),
 };
+
+// ----------------------------------------------------------------------
+// 03｜個人分類：進度、檢視、暫停、結束
+// ----------------------------------------------------------------------
+function personalRows() {
+  const cards = S.content.cards;
+  return S.people.filter((p) => p.status === 'active').map((p) => {
+    const b = S.personal.byId?.get(p.id);
+    const sn = S.personal.snapById?.get(p.id) || null;
+    const data = M.normalize(sn ? sn.data : b?.data, cards);
+    return { p, b, snap: sn, data, placed: M.placedCount(data, cards), submitted: Boolean(b?.submitted_at),
+             started: (b?.rev || 0) > 0 };
+  });
+}
+
+function unfinishedCount() {
+  return personalRows().filter((r) => !r.submitted).length;
+}
+
+async function confirmEndPersonal() {
+  const n = unfinishedCount();
+  const total = S.people.filter((p) => p.status === 'active').length;
+  return confirmDialog({
+    title: '結束個人分類？',
+    body: h('div',
+      n > 0 ? h('p', h('b', `還有 ${n} 位學生尚未完成個人分類`), `（共 ${total} 人）。`) : h('p', `全部 ${total} 位學生都已完成。`),
+      h('p', '結束後所有學生的個人分類會鎖定並保存唯讀快照；未完成者保留目前已儲存的部分，並標示「未完成」。'),
+      h('p.muted', '之後返回第三環節也不會解除鎖定。')),
+    buttons: [{ label: '返回等待', value: false },
+              { label: '確認結束，進入第四環節', value: true, primary: true }],
+  });
+}
+
+function fmtTime(t) {
+  if (!t) return '—';
+  const d = new Date(t);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function viewBoard(r, group) {
+  const cards = S.content.cards;
+  const v = createBoardView({ cards, title: `${group?.name || ''}・${r.p.seat_label} 的個人分類（僅教師可見，不會投影）`,
+    readOnly: true, embedded: true });
+  v.setData(r.data);
+  if (r.snap) v.setNotice(h('div.bd-notice' + (r.snap.is_complete ? '.info' : ''),
+    r.snap.is_complete ? '已鎖定的快照：完成' : '已鎖定的快照：未完成（保留當時已儲存的部分）'));
+  const dlg = h('dialog.dialog.wide', v.el,
+    h('div.dialog-actions', h('button.primary', { type: 'button', onclick: () => { dlg.close(); dlg.remove(); v.destroy(); } }, '關閉')));
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+}
+
+function panelPersonal() {
+  const rows = personalRows();
+  const locked = S.personal.snapshots > 0;
+  const ended = S.session.status === 'ended';
+  const total = rows.length;
+  const done = rows.filter((r) => r.submitted).length;
+  const paused = S.state.editing_paused;
+  const n = S.content.cards.length;
+  const statusOf = (r) => {
+    if (r.snap) return r.snap.is_complete ? h('span.tag.pub', '快照：完成') : h('span.tag.warn', '快照：未完成');
+    if (r.submitted) return h('span.tag.pub', '已完成');
+    return r.started ? h('span.tag', '分類中') : h('span.tag', '未開始');
+  };
+  return h('div',
+    h('div.pp-summary',
+      h('span.stat', '已加入', h('b', total)),
+      h('span.stat', '已完成個人分類', h('b', done)),
+      h('span.stat', '尚未完成', h('b', total - done)),
+      h('span.stat', '在線', h('b', onlineCount(S.people)))),
+    locked
+      ? h('p.pill', `個人分類已結束：成果已鎖定（快照完成 ${rows.filter((r) => r.snap?.is_complete).length} 人、未完成 ${rows.filter((r) => r.snap && !r.snap.is_complete).length} 人）`)
+      : paused ? h('p.pill.warn', '個人分類已暫停：學生可以閱讀，但不能修改。') : null,
+    h('div.btn-grid',
+      locked || ended ? null : h('button', { onclick: () => setFlags({ p_editing_paused: !paused }) },
+        paused ? '恢復個人分類' : '暫停個人分類'),
+      ended ? null : h('button.primary', { onclick: () => goPhase('04') },
+        locked ? '進入第四環節：小組共作 →' : '結束個人分類，進入第四環節 →')),
+    h('table.tbl.pp-table',
+      h('thead', h('tr', h('th', '組別'), h('th', '已加入'), h('th', '已完成個人分類'), h('th', ''))),
+      h('tbody', S.groups.flatMap((g) => {
+        const gr = rows.filter((r) => r.p.group_id === g.id);
+        const open = S.ppOpen.has(g.id);
+        const toggle = () => { if (open) S.ppOpen.delete(g.id); else S.ppOpen.add(g.id); renderAll(); };
+        const head = h('tr.pp-row', { onclick: toggle },
+          h('td', h('b', g.name)), h('td', `${gr.length} 人`), h('td', `${gr.filter((r) => r.submitted).length} 人`),
+          h('td', h('button.small', { type: 'button' }, open ? '收合 ▴' : '詳細 ▾')));
+        if (!open) return [head];
+        return [head, h('tr.pp-detail', h('td', { colspan: 4 }, gr.length === 0 ? h('p.muted.small', '尚無學生') :
+          h('table.pp-people',
+            h('thead', h('tr', h('th', '座號'), h('th', '連線'), h('th', '已分類'), h('th', '狀態'), h('th', '最後儲存'), h('th', ''))),
+            h('tbody', gr.map((r) => h('tr',
+              h('td', r.p.seat_label),
+              h('td', h('span.dot' + (isOnline(r.p) ? '.on' : '')), isOnline(r.p) ? ' 在線' : ' 離線'),
+              h('td', h('span.pp-bar', h('span', { style: { width: (n ? r.placed / n * 100 : 0) + '%' } })), `${r.placed} / ${n}`),
+              h('td', statusOf(r)),
+              h('td.mono.small', fmtTime(r.b?.updated_at)),
+              h('td', h('button.small', { type: 'button', onclick: () => viewBoard(r, g) }, '查看'))))))))];
+      }))),
+    h('p.muted', '「查看」只在本機開啟，不會出現在投影上。學生的個人分類彼此獨立，同組同學也看不到彼此的成果。'));
+}
 
 // ----------------------------------------------------------------------
 // 連線管理（各組人數、在線狀態、調整組別）

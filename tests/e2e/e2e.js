@@ -24,6 +24,69 @@ async function waitNoText(page, s, ms = 12000) {
   await page.waitForFunction((s) => !document.body.innerText.includes(s), s, { timeout: ms });
 }
 
+// ---------- Phase 2：分類工作區操作 ----------
+const grip = (page, title) => page.locator(`.sc:has(.sc-title:text-is("${title}")) .sc-grip`);
+const cat = (page, i) => page.locator('.bd-cat').nth(i);
+const countText = (page) => page.textContent('.bd-count');
+async function waitCount(page, n, total = 8) {
+  await page.waitForFunction((s) => document.querySelector('.bd-count')?.textContent === s, `已分類 ${n} / ${total}`, { timeout: 8000 });
+}
+function center(b, dy) { return [b.x + b.width / 2, b.y + (dy ?? b.height / 2)]; }
+// 滑鼠拖曳（桌面）
+async function mouseDrag(page, from, to) {
+  const [x0, y0] = center(await from.boundingBox());
+  const [x1, y1] = center(await to.boundingBox(), 30);
+  await page.mouse.move(x0, y0); await page.mouse.down();
+  for (let i = 1; i <= 12; i++) { await page.mouse.move(x0 + (x1 - x0) * i / 12, y0 + (y1 - y0) * i / 12); await page.waitForTimeout(16); }
+  await page.mouse.up();
+}
+// 真實觸控事件拖曳（平板手指；經由 Chrome DevTools Protocol 產生 touch → pointer 事件）
+async function touchDrag(page, from, to) {
+  const cdp = await page.context().newCDPSession(page);
+  const [x0, y0] = center(await from.boundingBox());
+  const [x1, y1] = center(await to.boundingBox(), 30);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+  for (let i = 1; i <= 14; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 14, y: y0 + (y1 - y0) * i / 14 }] });
+    await page.waitForTimeout(16);
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}
+// 點選移動：點把手（觸控 tap）→ 點目標區域
+async function tapMove(page, title, target) {
+  await grip(page, title).tap();
+  try { await page.waitForSelector('.bd-movebar:not([hidden])', { timeout: 4000 }); }
+  catch (e) {
+    const g = grip(page, title);
+    const bb = await g.boundingBox().catch(() => null);
+    const info = await page.evaluate(([x, y]) => {
+      const el = document.elementFromPoint(x, y);
+      return { at: el?.className + ' / ' + el?.closest('.sc')?.textContent, bd: document.querySelector('.bd')?.className,
+               dialogs: document.querySelectorAll('dialog').length, ev: (window.__ev || []).slice(-12) };
+    }, bb ? [bb.x + bb.width / 2, bb.y + bb.height / 2] : [0, 0]);
+    console.log('DIAG tapMove', title, JSON.stringify(bb), JSON.stringify(info));
+    throw e;
+  }
+  const t = target === 'unplaced' ? page.locator('.bd-left .bd-col-title') : target.locator('.bd-cat-head .bd-cat-n');
+  await t.tap();
+}
+async function boardState(page) {
+  return page.evaluate(() => ({
+    unplaced: [...document.querySelectorAll('.bd-left .sc-title')].map((e) => e.textContent),
+    cats: [...document.querySelectorAll('.bd-cat')].map((c) => ({
+      name: c.querySelector('.bd-name').value, ph: c.querySelector('.bd-name').placeholder,
+      cards: [...c.querySelectorAll('.sc-title')].map((e) => e.textContent) })),
+  }));
+}
+// 確認某元素完整位於視窗內（不被遮擋、不需縮放）
+async function inViewport(page, sel) {
+  return page.evaluate((sel) => {
+    const r = document.querySelector(sel)?.getBoundingClientRect();
+    return Boolean(r) && r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight + 1 && r.right <= innerWidth + 1 && r.width > 0;
+  }, sel);
+}
+
 (async () => {
   const browser = await chromium.launch();
   const errors = [];
@@ -68,6 +131,8 @@ async function waitNoText(page, s, ms = 12000) {
     const students = [];
     for (const [i, grp] of [[1, 1], [2, 1], [3, 2]]) {
       const sc = await ctx(browser, { viewport: { width: 1180, height: 820 }, hasTouch: true });
+      await sc.addInitScript(() => { window.__ev = []; for (const t of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture', 'click'])
+        document.addEventListener(t, (e) => window.__ev.push(t + ':' + (e.target.className || e.target.tagName)), true); });
       const s = await sc.newPage();
       s.on('pageerror', (e) => errors.push('student' + i + ': ' + e.message));
       await s.goto(join);
@@ -120,14 +185,230 @@ async function waitNoText(page, s, ms = 12000) {
     await teacher.click('text=返回任務說明');
     await waitText(proj, '仔細觀察故事的共同特色');
 
-    // ---------- 03 ----------
+    // ---------- 03｜我的故事分類（Phase 2） ----------
+    const [s0, s1, s2] = students.map((x) => x.page);   // s0、s1 同為第 1 組；s2 為第 2 組
     await teacher.click('text=開放第三環節：我的故事分類 →');
-    await waitText(students[0].page, '故事 H');
-    ok((await students[0].page.locator('.s-card').count()) === 8, '03：學生端讀到 8 張故事卡');
-    await students[0].page.screenshot({ path: path.join(OUT, 's03-cards.png') });
+    await waitText(s0, '尚未分類（8）');
+    ok((await s0.locator('.bd-left .sc').count()) === 8, '03：學生端左側顯示 8 張故事卡（圖片佔位＋名稱＋摘要）');
+    ok((await s0.locator('.bd-cat').count()) === 0 && (await text(s0)).includes('新增分類，將有共同特色的故事放在一起。'), '03：右側分類區初始為空白，只有一句提示');
+    ok(!(await s0.locator('.bd-movebar').isVisible()) && !(await s0.locator('.bd-notice').isVisible()), '03：正常狀態下沒有多餘的提示列');
+    const st0 = await text(s0);
+    ok(!/奇幻|偵探|歷史小說|冒險小說|武俠/.test(st0) && !/\d+ 號/.test(st0) && !st0.includes('組員'), '03：學生畫面不顯示小說類型、座號或組員');
+    await waitText(proj, '找出共同特色');
+    const p03 = await text(proj);
+    ok(p03.includes('我的故事分類') && p03.includes('閱讀故事') && p03.includes('建立自己的分類') && !/奇幻|偵探|武俠/.test(p03), '03：投影顯示任務引導，不顯示小說類型');
+    await s0.screenshot({ path: path.join(OUT, 's03-start.png') });
+
+    // 閱讀詳細故事：不改變分類
+    await s0.locator('.sc:has(.sc-title:text-is("故事 C")) .sc-read').tap();
+    await s0.waitForSelector('dialog.reader[open]');
+    ok((await s0.textContent('dialog.reader')).includes('硯生'), '03：點故事卡內容開啟詳細介紹（長文）');
+    await s0.screenshot({ path: path.join(OUT, 's03-reader.png') });
+    await s0.click('dialog.reader button:has-text("關閉")');
+    ok((await s0.locator('dialog.reader').count()) === 0 && (await countText(s0)) === '已分類 0 / 8', '03：關閉閱讀視窗後回到原畫面，分類沒有改變');
+
+    // 新增分類（先分組，再命名）
+    for (let i = 0; i < 3; i++) await s0.click('.bd-add');
+    let bs = await boardState(s0);
+    ok(bs.cats.length === 3 && bs.cats.map((c) => c.ph).join() === '分類 1,分類 2,分類 3' && bs.cats.every((c) => c.name === ''),
+      '03：新增三個分類，顯示暫時名稱「分類 1～3」（名稱欄位仍為空）');
+
+    // 三種移動方式
+    await mouseDrag(s0, grip(s0, '故事 A'), cat(s0, 0));
+    await waitCount(s0, 1);
+    ok((await boardState(s0)).cats[0].cards.includes('故事 A'), '03：滑鼠拖曳：未分類 → 分類 1');
+    await touchDrag(s0, grip(s0, '故事 B'), cat(s0, 0));
+    await waitCount(s0, 2);
+    ok((await boardState(s0)).cats[0].cards.includes('故事 B'), '03：觸控拖曳（手指）：未分類 → 分類 1');
+    await tapMove(s0, '故事 C', cat(s0, 1));
+    await waitCount(s0, 3);
+    ok((await boardState(s0)).cats[1].cards.includes('故事 C'), '03：點選移動（點「移動」→ 點分類 2）');
+    await tapMove(s0, '故事 A', cat(s0, 1));
+    await s0.waitForTimeout(200);
+    bs = await boardState(s0);
+    ok(bs.cats[1].cards.join() === '故事 A,故事 C' && !bs.cats[0].cards.includes('故事 A') && (await countText(s0)) === '已分類 3 / 8',
+      '03：在不同分類間移動；原位置移除、已分類數量不變');
+    await touchDrag(s0, grip(s0, '故事 C'), s0.locator('.bd-left'));
+    await waitCount(s0, 2);
+    ok((await boardState(s0)).unplaced.includes('故事 C'), '03：拖回尚未分類區');
+    await tapMove(s0, '故事 B', 'unplaced');
+    await waitCount(s0, 1);
+    ok((await boardState(s0)).unplaced.includes('故事 B'), '03：點選移動回尚未分類區');
+    // 點閱讀不會誤觸移動
+    await s0.locator('.bd-cat .sc-read').first().tap();
+    await s0.waitForSelector('dialog.reader[open]');
+    await s0.click('dialog.reader button:has-text("關閉")');
+    ok((await countText(s0)) === '已分類 1 / 8' && (await s0.locator('.bd-movebar:not([hidden])').count()) === 0, '03：已分類的故事可重新閱讀，且不會觸發移動');
+
+    // 刪除含故事的分類：確認後故事回到未分類
+    await tapMove(s0, '故事 D', cat(s0, 2));
+    await waitCount(s0, 2);
+    await cat(s0, 2).locator('.bd-del').click();
+    await waitText(s0, '裡面的 1 張故事會回到「尚未分類」');
+    await s0.click('dialog button:has-text("刪除分類")');
+    await waitCount(s0, 1);
+    bs = await boardState(s0);
+    ok(bs.cats.length === 2 && bs.unplaced.includes('故事 D') && bs.cats[1].cards.join() === '故事 A', '03：刪除分類後故事回到未分類，其他分類不受影響');
+
+    // 快速連續移動多張故事（不等待），重新整理後與畫面一致
+    const fast = ['故事 B', '故事 C', '故事 D', '故事 E', '故事 F', '故事 G'];
+    for (const [i, t] of fast.entries()) await tapMove(s0, t, cat(s0, i % 2));
+    await waitCount(s0, 7);
+    // 繁體中文命名（含輸入法組字事件）
+    const cdp = await s0.context().newCDPSession(s0);
+    await cat(s0, 0).locator('.bd-name').tap();
+    await cdp.send('Input.imeSetComposition', { text: 'ㄇㄛˊ', selectionStart: 3, selectionEnd: 3 });
+    await cdp.send('Input.imeSetComposition', { text: '魔', selectionStart: 1, selectionEnd: 1 });
+    await cdp.send('Input.insertText', { text: '會魔法' });
+    await cdp.detach();
+    await cat(s0, 1).locator('.bd-name').tap();
+    await s0.keyboard.insertText('尋找');
+    await s0.keyboard.insertText('祕密');
+    await s0.locator('.bd-name').nth(1).press('Enter');
+    const before = await boardState(s0);
+    ok(before.cats[0].name === '會魔法' && before.cats[1].name === '尋找祕密', '03：直接在分類上輸入繁體中文名稱（含輸入法組字）');
+    await s0.waitForTimeout(1500);   // 名稱延遲儲存
+    await s0.reload();
+    await waitText(s0, '已分類 7 / 8');
+    ok(JSON.stringify(await boardState(s0)) === JSON.stringify(before), '03：重新整理後分類、故事位置、名稱完全恢復（快速操作沒有錯亂）');
+
+    // 資料隔離：同組另一位學生是自己的空白分類
+    await waitText(s1, '尚未分類（8）');
+    ok((await s1.locator('.bd-cat').count()) === 0 && !(await text(s1)).includes('會魔法'), '03：同組學生看不到也不受另一位的分類影響');
+    await s1.click('.bd-add');
+    await tapMove(s1, '故事 H', cat(s1, 0));
+    await waitCount(s1, 1);
+    await s0.waitForTimeout(3500);
+    ok(!(await boardState(s0)).cats.some((c) => c.cards.includes('故事 H')), '03：學生 B 的操作不影響學生 A');
+
+    // 同一位學生開第二個分頁：不互相覆蓋
+    const s0b = await s0.context().newPage();
+    s0b.on('pageerror', (e) => errors.push('student1-tab2: ' + e.message));
+    await s0b.goto(s0.url());
+    await waitText(s0b, '已分類 7 / 8');
+    await tapMove(s0b, '故事 H', cat(s0b, 1));
+    await waitCount(s0b, 8);
+    await waitCount(s0, 8);
+    ok((await boardState(s0)).cats[1].cards.includes('故事 H'), '03：同一學生的第二個分頁修改後，第一個分頁同步到最新版本（不會用舊資料覆蓋）');
+    await s0b.close();
+
+    // 提交前檢查
+    await tapMove(s0, '故事 H', 'unplaced');
+    await waitCount(s0, 7);
+    await s0.click('.pb-done');
+    await waitText(s0, '還有 1 張故事尚未分類。');
+    ok(true, '03：尚有故事未分類時不能提交，並提示張數');
+    await s0.click('.bd-add');
+    await tapMove(s0, '故事 H', cat(s0, 2));
+    await waitCount(s0, 8);
+    await s0.click('.pb-done');
+    await waitText(s0, '請為分類 3 取一個名稱。');
+    ok(!(await text(s0)).includes('已完成個人分類'), '03：有分類未命名時提示「請為分類 3 取一個名稱」');
+    await s0.click('.bd-add');   // 空分類：提交時自動排除
+    await cat(s0, 2).locator('.bd-name').fill('勇敢面對挑戰');
+    await s0.click('.pb-done');
+    await waitText(s0, '✓ 已完成個人分類');
+    ok((await s0.locator('.sc-grip').count()) === 0 && (await s0.locator('.bd-cat').count()) === 3 && !(await s0.locator('.bd-add').isVisible())
+      && !(await s0.locator('.bd-movebar').isVisible()) && !(await s0.locator('.bd-del').first().isVisible()), '03：提交成功後唯讀顯示成果（空分類已排除，沒有編輯控制項）');
+    await s0.screenshot({ path: path.join(OUT, 's03-submitted.png') });
+    await waitText(teacher, '已完成個人分類');
+    await teacher.waitForFunction(() => /已完成個人分類\s*1/.test(document.querySelector('.pp-summary')?.innerText || ''), null, { timeout: 12000 });
+    ok(true, '03：教師端完成人數即時更新（1 人）');
+
+    // 繼續修改 → 重新提交
+    await s0.click('button:has-text("繼續修改")');
+    await s0.waitForSelector('.pb-done');
+    ok((await s0.locator('.sc-grip').count()) === 8, '03：教師結束前可「繼續修改」');
+    await s0.click('.pb-done');
+    await waitText(s0, '✓ 已完成個人分類');
+    ok(true, '03：重新提交後再次完成');
+
+    // 教師檢視個人成果（不投影）
+    await teacher.click('.pp-row:has-text("第 1 組")');
+    await teacher.waitForSelector('.pp-people');
+    const detail = await teacher.textContent('.pp-people');
+    ok(detail.includes('8 / 8') && detail.includes('已完成') && detail.includes('1 / 8'), '03：教師展開小組看到每位學生的已分類數量與完成狀態');
+    await teacher.locator('.pp-people button:has-text("查看")').first().click();
+    await teacher.waitForSelector('dialog.wide .bd');
+    ok((await teacher.textContent('dialog.wide')).includes('會魔法'), '03：教師可查看學生個人分類內容');
+    await teacher.screenshot({ path: path.join(OUT, 't03-progress.png') });
+    await proj.waitForTimeout(3500);
+    ok(!(await text(proj)).includes('會魔法'), '03：教師查看時投影端不會出現個人成果');
+    await teacher.click('dialog.wide button:has-text("關閉")');
+
+    // 網路中斷：顯示未儲存，恢復後自動補存
+    await s1.context().setOffline(true);
+    await tapMove(s1, '故事 A', cat(s1, 0));
+    await waitText(s1, '尚未儲存');
+    await s1.click('.pb-done');
+    await waitText(s1, '還有 6 張故事尚未分類。');
+    ok(!(await text(s1)).includes('已完成個人分類'), '03：離線時顯示「尚未儲存」，不會誤顯示完成');
+    await s1.context().setOffline(false);
+    await waitNoText(s1, '尚未儲存', 20000);
+    await s1.reload();
+    await waitText(s1, '已分類 2 / 8');
+    ok((await boardState(s1)).cats[0].cards.join() === '故事 A,故事 H', '03：網路恢復後自動儲存，重新整理仍是最新資料、身分不變');
+
+    // 暫停／恢復
+    await teacher.click('button:has-text("暫停個人分類")');
+    await waitText(s1, '老師暫停了編輯');
+    ok((await s1.locator('.sc-grip').count()) === 0 && !(await s1.locator('.bd-add').isVisible()) && !(await s1.locator('.bd-name').first().isVisible()), '03：暫停時學生不能修改（沒有移動、新增、命名欄位）');
+    await s1.locator('.sc-read').first().tap();
+    await s1.waitForSelector('dialog.reader[open]');
+    await s1.click('dialog.reader button:has-text("關閉")');
+    ok(true, '03：暫停時仍可閱讀故事');
+    await teacher.click('button:has-text("恢復個人分類")');
+    await waitNoText(s1, '老師暫停了編輯');
+    await s1.waitForSelector('.sc-grip');
+    ok((await countText(s1)) === '已分類 2 / 8', '03：恢復後回到原有成果繼續操作');
+
+    // 版面：橫向雙欄、直向、分類增加後完成按鈕仍可見
+    const l = await s2.evaluate(() => { const a = document.querySelector('.bd-left').getBoundingClientRect(); const b = document.querySelector('.bd-right').getBoundingClientRect(); return [a.width, b.width, a.top === b.top]; });
+    ok(l[2] && l[0] / (l[0] + l[1]) > 0.36 && l[0] / (l[0] + l[1]) < 0.44, `03：橫向平板左右雙區（左側約 ${Math.round(l[0] / (l[0] + l[1]) * 100)}%）`);
+    for (let i = 0; i < 9; i++) await s2.click('.bd-add');
+    ok(await inViewport(s2, '.pb-done'), '03：分類增加到 9 組後，完成按鈕仍完整可見');
+    await s2.screenshot({ path: path.join(OUT, 's03-many-landscape.png') });
+    await s2.setViewportSize({ width: 820, height: 1180 });
+    await s2.waitForTimeout(300);
+    const pt2 = await s2.evaluate(() => { const a = document.querySelector('.bd-left').getBoundingClientRect(); const b = document.querySelector('.bd-right').getBoundingClientRect(); return a.bottom <= b.top + 1 && document.documentElement.scrollWidth <= innerWidth; });
+    ok(pt2 && await inViewport(s2, '.pb-done'), '03：直向平板改為上下配置，不需縮放，完成按鈕可見');
+    await tapMove(s2, '故事 E', cat(s2, 0));
+    await waitCount(s2, 1);
+    ok(true, '03：直向平板可正常點選移動');
+    await s2.screenshot({ path: path.join(OUT, 's03-portrait.png') });
+    await s2.setViewportSize({ width: 1180, height: 820 });
+
+    // 結束個人分類：顯示未完成人數 → 返回等待 → 確認結束
+    await teacher.click('button:has-text("結束個人分類，進入第四環節 →")');
+    await waitText(teacher, '還有 2 位學生尚未完成個人分類');
+    await teacher.click('dialog button:has-text("返回等待")');
+    await teacher.waitForTimeout(500);
+    ok((await teacher.textContent('.pill')).includes('03'), '03：選「返回等待」環節不變');
+    await teacher.click('button:has-text("結束個人分類，進入第四環節 →")');
+    await waitText(teacher, '還有 2 位學生尚未完成個人分類');
+    await teacher.click('dialog button:has-text("確認結束，進入第四環節")');
+    await waitText(s0, '查看我的個人分類');
+    ok(true, '03 → 04：教師確認後結束個人分類（未完成者不阻止進入下一環節）');
+
+    // 04：唯讀個人成果面板（預設收合）
+    ok(!(await text(s0)).includes('會魔法'), '04：個人成果面板預設收合');
+    await s0.click('text=查看我的個人分類');
+    await waitText(s0, '會魔法');
+    ok((await s0.locator('.mp .sc-grip').count()) === 0, '04：可展開查看自己的個人分類（唯讀）');
+    await s1.click('text=查看我的個人分類');
+    await waitText(s1, '當時已儲存的部分');
+    ok(true, '04：未完成學生的快照標示未完成，保留已儲存部分');
+
+    // 返回 03 不會解除鎖定
+    await teacher.click('button:has-text("← 上一環節")');
+    await waitText(s1, '老師已結束個人分類，你的成果已保存。');
+    ok((await s1.locator('.sc-grip').count()) === 0 && (await countText(s1)) === '已分類 2 / 8', '返回 03：學生無法修改，看到的是已鎖定的成果');
+    ok((await text(teacher)).includes('個人分類已結束'), '返回 03：教師端顯示個人分類已鎖定');
+    await teacher.click('button:has-text("進入第四環節：小組共作 →")');
+    await waitText(s0, '查看我的個人分類');
 
     // ---------- 04 → 05（未提交確認） ----------
-    await teacher.click('text=進入第四環節：小組共作 →');
+    // （已於 03 段落進入 04）
     await waitText(proj, '分享自己的分類想法');
     await waitText(students[2].page, '故事找朋友：小組共作');
     ok(true, '04：投影只顯示任務說明，學生端同步');

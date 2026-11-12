@@ -294,7 +294,7 @@ end $$;
 create or replace function public.student_state(p_session uuid, p_token text)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare p public.participants; s public.sessions; st public.session_state; g public.groups;
-        b public.personal_boards; v_active boolean;
+        b public.personal_boards; v_active boolean; v_locked boolean;
 begin
   p := app.participant(p_session, p_token);
   select * into s from public.sessions where id = p_session;
@@ -308,6 +308,7 @@ begin
   select * into g from public.groups where id = p.group_id;
   select * into b from public.personal_boards where participant_id = p.id;
   v_active := s.status = 'active';
+  v_locked := app.personal_closed(p_session);
   return jsonb_build_object(
     'removed', false,
     'session', jsonb_build_object('id', s.id, 'title', s.title, 'status', s.status),
@@ -315,9 +316,11 @@ begin
                                 'focus_mode', st.focus_mode, 'editing_paused', st.editing_paused),
     'me', jsonb_build_object('group_number', g.number, 'group_name', g.name, 'seat_label', p.seat_label),
     'group', jsonb_build_object('status', g.status, 'board_rev', g.board_rev),
-    'personal', jsonb_build_object('rev', coalesce(b.rev, 0), 'submitted', b.submitted_at is not null),
+    'personal', jsonb_build_object('rev', coalesce(b.rev, 0), 'submitted', b.submitted_at is not null,
+                                   'locked', v_locked),
     'can', jsonb_build_object(
-      'personal_edit', v_active and st.phase = '03' and not st.editing_paused and b.submitted_at is null,
+      'personal_edit', v_active and st.phase = '03' and not st.editing_paused and b.submitted_at is null
+                       and not v_locked,
       'group_edit',    v_active and st.phase = '04' and not st.editing_paused and g.status = 'open'));
 end $$;
 
@@ -338,6 +341,66 @@ end $$;
 -- ---------------------------------------------------------------------
 -- 個人分類
 -- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------
+-- 個人分類（Phase 2）
+--   鎖定：教師「結束個人分類」（離開 03 前往 04 以後，或結束場次）時，
+--         系統為全班寫入 personal_snapshots。只要本場次已有快照，個人分類即視為鎖定：
+--         返回 03 不會自動解除，離線裝置重新連線也無法再寫入。
+--         （鎖定狀態由快照是否存在推導，因此不需要新增欄位，升級只需重跑本檔。）
+--   一致性：每個寫入 RPC 以 FOR SHARE 讀取 session_state；教師切換環節時以 FOR UPDATE 鎖住同一列，
+--         因此「學生儲存」與「教師建立快照」在伺服器端必定依序執行：
+--         先到的學生儲存會被快照包含；晚到的儲存會看到新環節而被拒絕，不會出現快照之後才寫入的資料。
+-- ---------------------------------------------------------------------
+create or replace function app.personal_closed(p_session uuid) returns boolean
+language sql stable security definer set search_path = public, pg_temp as $$
+  select exists (select 1 from public.personal_snapshots where session_id = p_session);
+$$;
+
+-- 暫時名稱：空白，或學生沒有改動的「分類 N」（含全形數字）都不算正式命名
+create or replace function app.is_temp_name(p_name text) returns boolean
+language sql immutable as $$
+  select btrim(coalesce(p_name, '')) = '' or btrim(p_name) ~ '^分類\s*[0-9０-９]+$';
+$$;
+
+-- 完整性檢查（只檢查是否完成，不判斷分類對錯）
+-- 有效分類＝至少放了一張故事卡的分類；空分類不影響提交
+create or replace function app.personal_problems(p_data jsonb, p_set uuid) returns jsonb
+language sql stable security definer set search_path = public, pg_temp as $$
+  with cards as (select id::text as id from public.story_cards where content_set_id = p_set),
+       pl as (select key as card, value #>> '{}' as cat from jsonb_each(coalesce(p_data -> 'placements', '{}'::jsonb))),
+       cats as (select c ->> 'id' as id, coalesce(c ->> 'name', '') as name, (c ->> 'no')::int as no, ord
+                  from jsonb_array_elements(coalesce(p_data -> 'categories', '[]'::jsonb)) with ordinality as e(c, ord)),
+       unplaced as (select count(*) n from cards where not exists (
+                      select 1 from pl join cats on cats.id = pl.cat where pl.card = cards.id)),
+       unnamed as (select coalesce(jsonb_agg(cats.id order by cats.ord), '[]'::jsonb) ids,
+                          coalesce(jsonb_agg(cats.no order by cats.ord), '[]'::jsonb) nos from cats
+                    where app.is_temp_name(cats.name)
+                      and exists (select 1 from pl join cards on cards.id = pl.card where pl.cat = cats.id))
+  select jsonb_build_object('total', (select count(*) from cards),
+                            'unplaced', (select n from unplaced),
+                            'unnamed', (select ids from unnamed), 'unnamed_no', (select nos from unnamed),
+                            'complete', (select n from unplaced) = 0 and jsonb_array_length((select ids from unnamed)) = 0);
+$$;
+
+-- 結束個人分類時保存唯讀快照（未完成者保留已儲存部分並標示 is_complete=false）。
+-- 已有快照的學生不覆寫：第一次結束時的成果就是正式快照。
+create or replace function app.snapshot_personal(p_session uuid) returns void
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare v_set uuid;
+begin
+  select content_set_id into v_set from public.sessions where id = p_session;
+  insert into public.personal_snapshots (participant_id, session_id, data, is_complete, submitted, board_rev, taken_at)
+  select p.id, p_session,
+         coalesce(b.data, '{"categories":[],"placements":{}}'::jsonb),
+         coalesce((app.personal_problems(b.data, v_set) ->> 'complete')::boolean, false) and b.submitted_at is not null,
+         b.submitted_at is not null, coalesce(b.rev, 0), now()
+    from public.participants p
+    left join public.personal_boards b on b.participant_id = p.id
+   where p.session_id = p_session and p.status = 'active'
+  on conflict (participant_id) do nothing;
+  perform app.notify('lesson:' || p_session, 'personal');
+end $$;
+
 create or replace function public.student_personal(p_session uuid, p_token text)
 returns jsonb language plpgsql stable security definer set search_path = public, pg_temp as $$
 declare p public.participants; b public.personal_boards; sn public.personal_snapshots; v_phase text; v_set uuid;
@@ -350,6 +413,7 @@ begin
   select * into sn from public.personal_snapshots where participant_id = p.id;
   return jsonb_build_object(
     'data', b.data, 'rev', b.rev, 'submitted', b.submitted_at is not null,
+    'updated_at', b.updated_at, 'locked', app.personal_closed(p_session),
     'problems', app.personal_problems(b.data, v_set),
     'snapshot', case when sn.participant_id is null then null else
       jsonb_build_object('data', sn.data, 'is_complete', sn.is_complete, 'taken_at', sn.taken_at) end);
@@ -361,9 +425,11 @@ declare p public.participants; s public.sessions; st public.session_state; b pub
 begin
   p := app.active_participant(p_session, p_token);
   select * into s from public.sessions where id = p_session;
-  select * into st from public.session_state where session_id = p_session;
+  -- FOR SHARE：與教師切換環節（FOR UPDATE）互斥，保證快照與最後一次儲存的先後一致
+  select * into st from public.session_state where session_id = p_session for share;
   if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
   if st.phase <> '03' then raise exception 'NOT_AVAILABLE'; end if;
+  if app.personal_closed(p_session) then raise exception 'PERSONAL_LOCKED'; end if;
   if st.editing_paused then raise exception 'PAUSED'; end if;
   select * into b from public.personal_boards where participant_id = p.id for update;
   if not found then
@@ -415,8 +481,10 @@ returns jsonb language plpgsql security definer set search_path = public, pg_tem
 declare b public.personal_boards;
 begin
   b := app.personal_edit_ctx(p_session, p_token);
+  if b.submitted_at is null then return jsonb_build_object('ok', true, 'rev', b.rev); end if;
   update public.personal_boards set submitted_at = null, rev = rev + 1 where participant_id = b.participant_id
   returning * into b;
+  perform app.notify('lesson:' || p_session, 'personal');
   return jsonb_build_object('ok', true, 'rev', b.rev);
 end $$;
 
