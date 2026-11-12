@@ -8,12 +8,21 @@ fs.mkdirSync(OUT, { recursive: true });
 
 let passed = 0;
 const externalRequests = [];
-function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; console.log('ok -', msg); }
+let lastOk = '';
+function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; lastOk = msg; console.log('ok -', msg); }
 
 async function ctx(browser, opts = {}) {
   const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, ...opts });
   // 封鎖所有外部網路請求：確認網站不依賴任何 CDN（學校網路常封鎖）
   await c.route((url) => !url.href.startsWith(BASE) && !url.href.startsWith(BASE.replace('http', 'ws')), (r) => { externalRequests.push(r.request().url()); r.abort(); });
+  if (process.env.DEBUG_RPC) {
+    c.on('response', async (r) => {
+      const u = r.url();
+      if (!u.includes('/rpc/group_') && !u.includes(process.env.DEBUG_RPC)) return;
+      let b = ''; try { b = (await r.text()).slice(0, 160); } catch { /* ignore */ }
+      console.log('RPC', u.split('/rpc/')[1], r.status(), (r.request().postData() || '').slice(0, 120), '→', b);
+    });
+  }
   return c;
 }
 const text = (page) => page.evaluate(() => document.body.innerText);
@@ -387,41 +396,300 @@ async function inViewport(page, sel) {
     await teacher.click('button:has-text("結束個人分類，進入第四環節 →")');
     await waitText(teacher, '還有 2 位學生尚未完成個人分類');
     await teacher.click('dialog button:has-text("確認結束，進入第四環節")');
-    await waitText(s0, '查看我的個人分類');
+    await waitText(s0, '第 1 組｜共同分類');
     ok(true, '03 → 04：教師確認後結束個人分類（未完成者不阻止進入下一環節）');
 
-    // 04：唯讀個人成果面板（預設收合）
-    ok(!(await text(s0)).includes('會魔法'), '04：個人成果面板預設收合');
-    await s0.click('text=查看我的個人分類');
-    await waitText(s0, '會魔法');
-    ok((await s0.locator('.mp .sc-grip').count()) === 0, '04：可展開查看自己的個人分類（唯讀）');
-    await s1.click('text=查看我的個人分類');
-    await waitText(s1, '當時已儲存的部分');
-    ok(true, '04：未完成學生的快照標示未完成，保留已儲存部分');
-
-    // 返回 03 不會解除鎖定
+    // 返回 03 不會解除鎖定，也不會重設小組工作區
     await teacher.click('button:has-text("← 上一環節")');
     await waitText(s1, '老師已結束個人分類，你的成果已保存。');
     ok((await s1.locator('.sc-grip').count()) === 0 && (await countText(s1)) === '已分類 2 / 8', '返回 03：學生無法修改，看到的是已鎖定的成果');
     ok((await text(teacher)).includes('個人分類已結束'), '返回 03：教師端顯示個人分類已鎖定');
     await teacher.click('button:has-text("進入第四環節：小組共作 →")');
-    await waitText(s0, '查看我的個人分類');
 
-    // ---------- 04 → 05（未提交確認） ----------
-    // （已於 03 段落進入 04）
-    await waitText(proj, '分享自己的分類想法');
-    await waitText(students[2].page, '故事找朋友：小組共作');
-    ok(true, '04：投影只顯示任務說明，學生端同步');
-    await teacher.click('text=結束共同分類，進入成果公開 →');
+    // ---------- 04｜小組共作（Phase 3） ----------
+    const G = '.gw-main';
+    const gGrip = (p, t) => p.locator(`${G} .sc:has(.sc-title:text-is("${t}")) .sc-grip`);
+    const gCat = (p, i) => p.locator(`${G} .bd-cat`).nth(i);
+    const gCount = (p) => p.textContent(`${G} .bd-count`);
+    async function gWaitCount(p, n) {
+      await p.waitForFunction((s) => document.querySelector('.gw-main .bd-count')?.textContent === s, `已分類 ${n} / 8`, { timeout: 12000 });
+    }
+    async function gTapMove(p, title, target) {
+      await gGrip(p, title).tap();
+      await p.waitForSelector('.gw-main .bd-movebar:not([hidden])');
+      const t = target === 'unplaced' ? p.locator(`${G} .bd-left .bd-col-title`) : target.locator('.bd-cat-head .bd-cat-n');
+      await t.tap();
+    }
+    // 小組工作區的實際內容（用來比對各裝置是否一致）
+    const gState = (p) => p.evaluate(() => {
+      const m = document.querySelector('.gw-main');
+      return JSON.stringify({
+        unplaced: [...m.querySelectorAll('.bd-left .sc-title')].map((e) => e.textContent).sort(),
+        cats: [...m.querySelectorAll('.bd-cat')].map((c) => ({
+          name: c.querySelector('.bd-name').value, ph: c.querySelector('.bd-name').placeholder,
+          reason: c.querySelector('.bd-reason').value,
+          cards: [...c.querySelectorAll('.sc-title')].map((e) => e.textContent).sort() })),
+      });
+    });
+    // 等到所有裝置的畫面完全相同（且符合 pred）才回傳
+    async function converge(pages, pred = () => true, ms = 12000) {
+      const until = Date.now() + ms;
+      let last = [];
+      while (Date.now() < until) {
+        last = await Promise.all(pages.map(gState));
+        if (last.every((x) => x === last[0]) && pred(JSON.parse(last[0]))) return last[0];
+        await pages[0].waitForTimeout(300);
+      }
+      throw new Error('FAIL: 裝置間不一致（上一步：' + lastOk + '）\n' + last.join('\n'));
+    }
+
+    await waitText(s0, '第 1 組｜共同分類');
+    await waitText(s1, '第 1 組｜共同分類');
+    await waitText(proj, '一起幫故事找朋友');
+    const p04 = await text(proj);
+    ok(p04.includes('分享自己原本的分類想法') && p04.includes('共同建立分類並說明理由') && !p04.includes('會魔法') && !/奇幻|偵探|武俠/.test(p04),
+      '04：投影顯示三步驟任務引導，不顯示任何個人或小組成果');
+    ok((await s0.locator(`${G} .bd-cat`).count()) === 0 && (await gCount(s0)) === '已分類 0 / 8', '04：小組工作區從空白開始（不匯入個人分類）');
+    const rail = await s0.evaluate(() => document.querySelector('.gw-panel').getBoundingClientRect().width);
+    ok(!(await s0.locator('.gw-panel.open').count()) && rail >= 48 && rail <= 56, `04：左側個人面板預設收合（${Math.round(rail)}px）`);
+    const t04 = await text(s0);
+    ok(!/\d+ 號/.test(t04) && !t04.includes('組員：') && !t04.includes('排行'), '04：學生畫面沒有座號、組員清單或排行');
+
+    // 補加入的第四位組員（第 1 組、04 才加入）：沒有個人快照，仍可共作
+    const s3c = await ctx(browser, { viewport: { width: 1180, height: 820 }, hasTouch: true });
+    const s3 = await s3c.newPage();
+    s3.on('pageerror', (e) => errors.push('student4: ' + e.message));
+    await s3.goto(join);
+    await waitText(s3, '請選擇你的組別');
+    await s3.click('.s-group:has(.n:text-is("1"))');
+    await s3.click('dialog button:has-text("確認加入")');
+    await waitText(s3, '第 1 組｜共同分類');
+    await s3.click('.gw-toggle');
+    await waitText(s3, '尚無個人分類紀錄');
+    ok(true, '04：補加入的學生可直接進入小組共作，個人面板顯示「尚無個人分類紀錄」');
+    await s3.click('.gw-toggle');
+
+    // 個人參考面板：本人的原始分類、唯讀、可閱讀、只影響自己的畫面
+    await s0.click('.gw-toggle');
+    await waitText(s0, '會魔法');
+    const pw = await s0.evaluate(() => [document.querySelector('.gw-panel').getBoundingClientRect().width, innerWidth]);
+    ok(pw[0] / pw[1] > 0.26 && pw[0] / pw[1] < 0.32, `04：展開後個人面板約占 ${Math.round(pw[0] / pw[1] * 100)}%`);
+    ok((await s0.locator('.gw-panel .sc-grip').count()) === 0 && (await s0.locator('.gw-panel .bd-add:visible').count()) === 0
+      && (await s0.locator('.gw-panel input:visible, .gw-panel textarea:visible').count()) === 0, '04：個人面板唯讀（不能移動、新增、命名）');
+    await s0.locator('.gw-panel .sc-read').first().click();
+    await s0.waitForSelector('dialog.reader[open]');
+    await s0.click('dialog.reader button:has-text("關閉")');
+    ok(true, '04：可從個人面板重新閱讀故事');
+    await s1.click('.gw-toggle');
+    await waitText(s1, '個人分類尚未完成');
+    ok(!(await s1.textContent('.gw-panel')).includes('會魔法'), '04：同組另一位學生看到的是自己的（未完成）個人分類，不是別人的');
+    await s1.click('.gw-toggle');
+    await s0.waitForTimeout(500);
+    ok(await s0.locator('.gw-panel.open').count() === 1, '04：其他組員的面板操作不影響自己');
+    ok(await inViewport(s0, '.gw-main .pb-done'), '04：面板展開時右側仍可操作，完成按鈕可見');
+    await s0.screenshot({ path: path.join(OUT, 's04-panel-open.png') });
+
+    // 新增分類、移動故事：三台裝置同步
+    await s0.click(`${G} .bd-add`);
+    await s1.click(`${G} .bd-add`);
+    await s3.click(`${G} .bd-add`);
+    await converge([s0, s1, s3], (x) => x.cats.length === 3);
+    const st3 = JSON.parse(await gState(s0));
+    ok(st3.cats.length === 3 && new Set(st3.cats.map((c) => c.ph)).size === 3, '04：三人同時新增分類，三個都保留且暫時名稱不重複（各裝置一致）');
+    await gTapMove(s1, '故事 A', gCat(s1, 0));
+    await touchDrag(s0, gGrip(s0, '故事 B'), gCat(s0, 0));
+    await mouseDrag(s3, gGrip(s3, '故事 C'), gCat(s3, 1));
+    let cs = JSON.parse(await converge([s0, s1, s3], (x) => x.cats[1]?.cards.length === 1 && x.cats[0].cards.length === 2));
+    ok(cs.cats[0].cards.join() === '故事 A,故事 B' && cs.cats[1].cards.join() === '故事 C', '04：點選、觸控拖曳、滑鼠拖曳的移動都同步到全組');
+
+    // 名稱與共同特色：中文輸入、同步、欄位鎖
+    await gCat(s0, 0).locator('.bd-name').tap();
+    const cdp0 = await s0.context().newCDPSession(s0);
+    await cdp0.send('Input.imeSetComposition', { text: 'ㄇㄛˊ', selectionStart: 3, selectionEnd: 3 });
+    await cdp0.send('Input.insertText', { text: '會魔法的故事' });
+    await cdp0.detach();
+    await gCat(s1, 0).locator('.bd-reason').tap();
+    await s1.keyboard.insertText('主角都');
+    await s0.waitForFunction(() => document.querySelectorAll('.gw-main .bd-cat')[0]?.querySelector('.bd-reason')?.readOnly, null, { timeout: 12000 });
+    ok((await s0.locator(`${G} .bd-cat >> nth=0 >> .bd-lock:visible`).count()) >= 1, '04：組員輸入共同特色時，該欄位顯示「組員輸入中…」並暫時不能輸入');
+    ok(await gCat(s0, 0).locator('.bd-name').evaluate((e) => !e.readOnly && document.activeElement === e), '04：同一分類的名稱仍可由另一位組員同時編輯（欄位級保護）');
+    await s0.screenshot({ path: path.join(OUT, 's04-editing-lock.png') });
+    // 輸入中，其他人移動故事：文字與焦點不受影響
+    await gTapMove(s3, '故事 D', gCat(s3, 1));
+    await s1.waitForFunction(() => document.querySelectorAll('.gw-main .bd-cat')[1]?.textContent.includes('故事 D'), null, { timeout: 12000 });
+    ok(await gCat(s1, 0).locator('.bd-reason').evaluate((e) => document.activeElement === e && e.value === '主角都'),
+      '04：輸入共同特色時，組員移動故事不會讓文字消失或鍵盤關閉');
+    await s1.keyboard.insertText('有神奇的力量');
+    await s0.locator(`${G} .bd-name`).first().press('Enter');
+    await gCat(s1, 0).locator('.bd-reason').blur();
+    await s1.waitForTimeout(300);
+    cs = JSON.parse(await converge([s0, s1, s3], (x) => x.cats[0].reason === '主角都有神奇的力量' && x.cats[0].name === '會魔法的故事'));
+    ok(cs.cats[0].name === '會魔法的故事' && cs.cats[0].reason === '主角都有神奇的力量', '04：分類名稱與共同特色同步到全組');
+    await s0.waitForFunction(() => ![...document.querySelectorAll('.gw-main .bd-lock')].some((e) => !e.hidden), null, { timeout: 8000 });
+    ok(true, '04：輸入完成後欄位鎖解除（其他裝置數秒內可再編輯）');
+
+    // 故事卡操作權：A 選取故事 E 時，B 不能動 E，但可以動其他故事
+    await gGrip(s0, '故事 E').tap();
+    await s1.waitForSelector(`${G} .sc:has(.sc-title:text-is("故事 E")) .sc-grip-locked`, { timeout: 12000 });
+    ok(true, '04：組員選取故事時，其他裝置該卡顯示「組員操作中」');
+    await gTapMove(s1, '故事 F', gCat(s1, 2));
+    await gWaitCount(s1, 5);
+    ok(true, '04：同時間其他故事卡仍可正常操作');
+    await s0.click(`${G} .bd-movebar button:has-text("取消")`);
+    await s1.waitForSelector(`${G} .sc:has(.sc-title:text-is("故事 E")) .sc-grip:not(.sc-grip-locked)`, { timeout: 12000 });
+    ok(true, '04：取消選取後操作權釋放');
+
+    // 兩人同時移動同一張故事 → 結果只有一個，所有裝置一致
+    await Promise.all([gTapMove(s0, '故事 G', gCat(s0, 0)), gTapMove(s3, '故事 G', gCat(s3, 2))]);
+    cs = JSON.parse(await converge([s0, s1, s3]));
+    const gIn = cs.cats.filter((c) => c.cards.includes('故事 G')).length + (cs.unplaced.includes('故事 G') ? 1 : 0);
+    ok(gIn === 1, '04：兩人同時移動同一張故事 → 只存在一個位置，三台裝置一致');
+    await s1.waitForTimeout(6500);   // 超過一次續約週期
+    ok((await s1.locator(`${G} .sc-grip-locked`).count()) === 0, '04：移動完成後不會繼續佔用該卡的操作權');
+
+    // 閱讀中，其他組員移動故事：閱讀視窗不會被關閉
+    await s1.locator(`${G} .bd-left .sc-read`).first().click();
+    await s1.waitForSelector('dialog.reader[open]');
+    const beforeR = JSON.parse(await gState(s0)).cats[1].cards.length;
+    await gTapMove(s0, JSON.parse(await gState(s0)).unplaced[0], gCat(s0, 1));
+    await s1.waitForFunction((n) => document.querySelectorAll('.gw-main .bd-cat')[1]?.querySelectorAll('.sc').length === n, beforeR + 1, { timeout: 12000 });
+    ok((await s1.locator('dialog.reader[open]').count()) === 1, '04：閱讀故事時，組員的操作同步進來也不會關閉閱讀視窗');
+    await s1.click('dialog.reader button:has-text("關閉")');
+    await gTapMove(s0, JSON.parse(await gState(s0)).cats[1].cards.slice(-1)[0], 'unplaced');
+    await converge([s0, s1, s3], (x) => x.cats[1].cards.length === beforeR);
+
+    // 刪除分類：他人正在輸入該分類時不能刪除；刪除後故事回到未分類
+    await gCat(s1, 2).locator('.bd-name').tap();
+    await s0.waitForFunction(() => document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-del')?.disabled, null, { timeout: 12000 });
+    ok(true, '04：組員正在輸入的分類不能刪除');
+    await gCat(s1, 2).locator('.bd-name').blur();
+    await s0.waitForFunction(() => !document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-del')?.disabled, null, { timeout: 12000 });
+    const before3 = JSON.parse(await gState(s0)).cats[2].cards;
+    await gCat(s0, 2).locator('.bd-del').click();
+    await waitText(s0, '刪除「分類 3」？');
+    await s0.click('dialog button:has-text("刪除分類")');
+    cs = JSON.parse(await converge([s0, s1, s3], (x) => x.cats.length === 2));
+    ok(cs.cats.length === 2 && before3.every((t) => cs.unplaced.includes(t)), '04：刪除分類後其中故事回到未分類（全組同步）');
+
+    // 重新整理：恢復最新共同成果，不重設工作區
+    await s1.reload();
+    await waitText(s1, '第 1 組｜共同分類');
+    await converge([s0, s1, s3]);
+    ok(true, '04：重新整理後恢復最新小組成果（不重新建立工作區）');
+
+    // 離線：暫停修改；恢復後繼續
+    await s3c.setOffline(true);
+    await waitText(s3, '連線中斷，重新連線後即可繼續共作。', 20000);
+    ok((await s3.locator(`${G} .sc-grip`).count()) === 0, '04：離線時暫停共同修改（仍可閱讀）');
+    await gTapMove(s0, '故事 H', gCat(s0, 1));
+    await s3c.setOffline(false);
+    await waitNoText(s3, '連線中斷', 20000);
+    await converge([s0, s1, s3]);
+    ok((await s3.locator(`${G} .sc-grip`).count()) > 0, '04：恢復連線後取得最新資料並可繼續共作');
+
+    // 不同組資料隔離
+    ok((await s2.locator(`${G} .bd-cat`).count()) === 0 && !(await text(s2)).includes('會魔法的故事'), '04：第二組看不到第一組的成果');
+
+    // 教師端監控與檢視（不投影）
+    await teacher.waitForFunction(() => /第 1 組[\s\S]*編輯中/.test(document.querySelector('.gp-table')?.innerText || ''), null, { timeout: 12000 });
+    await teacher.click('.gp-table tr:has-text("第 1 組") button:has-text("查看")');
+    await teacher.waitForSelector('dialog.wide .bd');
+    ok((await teacher.textContent('dialog.wide')).includes('主角都有神奇的力量'), '04：教師可查看指定小組的分類名稱與共同特色');
+    await teacher.screenshot({ path: path.join(OUT, 't04-view.png') });
+    await teacher.click('dialog.wide button:has-text("關閉")');
+    await proj.waitForTimeout(2500);
+    ok(!(await text(proj)).includes('會魔法的故事'), '04：教師查看時投影不變');
+
+    // 提交前檢查
+    await s0.click(`${G} .pb-done`);
+    await waitText(s0, '張故事尚未分類');
+    ok(true, '04：尚有故事未分類時不能提交');
+    const un = JSON.parse(await gState(s0)).unplaced;
+    for (const t of un) await gTapMove(s0, t, gCat(s0, 1));
+    await gWaitCount(s0, 8);
+    await s0.click(`${G} .pb-done`);
+    await waitText(s0, '請為分類 2 取一個名稱。');
+    await waitText(s0, '請寫下「分類 2」的共同特色。');
+    ok(true, '04：未命名、缺少共同特色時不能提交，並指出是哪個分類');
+    await gCat(s3, 1).locator('.bd-name').fill('勇敢面對挑戰');
+    await gCat(s3, 1).locator('.bd-reason').fill('主角都要克服困難');
+    await gCat(s3, 1).locator('.bd-reason').blur();
+    await converge([s0, s1, s3], (x) => x.cats[1].reason === '主角都要克服困難' && x.cats[1].name === '勇敢面對挑戰');
+    // 組員正在輸入時提交 → 提示等待
+    await gCat(s1, 0).locator('.bd-name').tap();
+    await s0.waitForFunction(() => document.querySelectorAll('.gw-main .bd-cat')[0]?.querySelector('.bd-name')?.readOnly, null, { timeout: 12000 });
+    await s0.click(`${G} .pb-done`);
+    await s0.click('dialog button:has-text("確認提交")');
+    await waitText(s0, '組員正在輸入或移動故事');
+    ok(true, '04：組員還在輸入時不能提交（避免遺漏內容）');
+    await gCat(s1, 0).locator('.bd-name').blur();
+    await s0.waitForFunction(() => !document.querySelectorAll('.gw-main .bd-cat')[0]?.querySelector('.bd-name')?.readOnly, null, { timeout: 12000 });
+    await s0.click(`${G} .pb-done`);
+    await waitText(s0, '確定完成小組分類？');
+    ok((await text(s0)).includes('提交後，全組將暫停編輯。'), '04：提交前顯示確認對話框');
+    await s0.click('dialog button:has-text("確認提交")');
+    for (const p of [s0, s1, s3]) await waitText(p, '小組分類已完成。');
+    ok((await s1.locator(`${G} .sc-grip`).count()) === 0 && !(await s1.locator(`${G} .bd-add`).isVisible())
+      && !(await s3.locator(`${G} .bd-reason`).first().isVisible()), '04：提交後全組同步為唯讀');
+    await s1.locator(`${G} .sc-read`).first().click();
+    await s1.waitForSelector('dialog.reader[open]');
+    await s1.click('dialog.reader button:has-text("關閉")');
+    ok(true, '04：提交後仍可閱讀故事、查看成果');
+    await s0.screenshot({ path: path.join(OUT, 's04-submitted.png') });
+
+    // 教師重新開放第 1 組（不影響第 2 組）→ 再次提交
+    await teacher.waitForFunction(() => /第 1 組[\s\S]*已提交/.test(document.querySelector('.gp-table')?.innerText || ''), null, { timeout: 12000 });
+    await teacher.click('.gp-table tr:has-text("第 1 組") button:has-text("重新開放")');
+    await teacher.click('dialog button:has-text("重新開放")');
+    await s1.waitForSelector(`${G} .sc-grip`, { timeout: 12000 });
+    ok((await s2.locator(`${G} .bd-cat`).count()) === 0, '04：重新開放第 1 組後可再編輯，第 2 組不受影響');
+    await gCat(s1, 1).locator('.bd-reason').fill('主角都要勇敢克服困難');
+    await gCat(s1, 1).locator('.bd-reason').blur();
+    await converge([s0, s1, s3], (x) => x.cats[1].reason === '主角都要勇敢克服困難');
+    await s3.waitForFunction(() => ![...document.querySelectorAll('.gw-main .bd-lock')].some((e) => !e.hidden), null, { timeout: 8000 });
+    await s3.click(`${G} .pb-done`);
+    await s3.click('dialog button:has-text("確認提交")');
+    for (const p of [s0, s1, s3]) await waitText(p, '小組分類已完成。');
+    ok(true, '04：重新開放後再次提交');
+
+    // 暫停全班編輯（已提交的組不受影響）
+    await teacher.click('button:has-text("暫停全班編輯")');
+    await waitText(s2, '老師暫停了編輯');
+    ok((await s2.locator(`${G} .sc-grip`).count()) === 0, '04：暫停時學生不能修改');
+    await teacher.click('button:has-text("恢復全班編輯")');
+    await s2.waitForSelector(`${G} .sc-grip`, { timeout: 12000 });
+    ok((await text(s0)).includes('小組分類已完成。'), '04：恢復後未提交的組可編輯，已提交的組維持已提交');
+    await s2.click(`${G} .bd-add`);
+    await gTapMove(s2, '故事 A', gCat(s2, 0));
+    await gWaitCount(s2, 1);
+
+    // 版面：直向平板（個人面板為抽屜）
+    await s3.setViewportSize({ width: 820, height: 1180 });
+    await s3.waitForTimeout(300);
+    await s3.click('.gw-toggle');
+    const drawer = await s3.evaluate(() => getComputedStyle(document.querySelector('.gw-panel')).position);
+    ok(drawer === 'fixed' && (await s3.evaluate(() => document.documentElement.scrollWidth <= innerWidth)), '04：直向平板時個人面板為滑出式抽屜，不需縮放');
+    await s3.screenshot({ path: path.join(OUT, 's04-portrait-drawer.png') });
+    await s3.click('.gw-backdrop', { position: { x: 760, y: 600 } });
+    await s3.screenshot({ path: path.join(OUT, 's04-portrait.png') });
+    await s3.setViewportSize({ width: 1180, height: 820 });
+
+    // ---------- 04 → 05（結束共同分類） ----------
+    await teacher.waitForFunction(() => /第 2 組\s*1\/8/.test(document.querySelector('.gp-table')?.innerText || ''), null, { timeout: 15000 });
+    ok(true, '04：教師端進度依實際資料更新（第 2 組 1/8）');
+    await teacher.click('text=結束共同分類，進入第五環節 →');
     await waitText(teacher, '仍有小組尚未提交');
+    const dt = await teacher.textContent('dialog');
+    ok(dt.includes('第 1 組：已提交') && dt.includes('第 2 組：編輯中（已分類 1/8'), '05 前：顯示各組提交狀態與進度 ' + (dt.includes('第 2 組：編輯中') ? '' : dt));
     await teacher.click('text=繼續等待');
     await teacher.waitForTimeout(500);
     ok((await teacher.textContent('.pill')).includes('04'), '05 前：選擇「繼續等待」時環節不變');
-    await teacher.click('text=結束共同分類，進入成果公開 →');
+    await teacher.click('text=結束共同分類，進入第五環節 →');
     await waitText(teacher, '仍有小組尚未提交');
-    await teacher.click('text=鎖定目前已儲存的成果並前往');
+    await teacher.click('text=確認結束，保存各組目前成果');
     await waitText(proj, '分類成果大公開');
-    ok((await teacher.textContent('.pill')).includes('05'), '05：教師確認鎖定未提交組別後才前往');
+    ok((await teacher.textContent('.pill')).includes('05'), '05：教師確認後結束共同分類，進入第五環節');
+    await s3c.close();
 
     // ---------- 06：私下預覽不影響投影 ----------
     await teacher.click('text=進入第六環節 →');

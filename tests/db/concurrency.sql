@@ -27,7 +27,9 @@ begin
   select coalesce((select rev from public.group_placements where group_id = v_gid and card_id = v_card), 0) into v_rev;
   perform pg_sleep(random() * 0.003);
   r := public.group_move_card(v_sid, v_tok, v_card, case when k = 3 then null else v_cat end, v_rev);
-  insert into t.log values ('move', (r->>'ok')::boolean, r->>'code', g, v_card::text);
+  -- unchanged：卡片已在目標位置（重送或他人已做同樣的移動），成功但不寫入、不增加版本
+  insert into t.log values ('move', (r->>'ok')::boolean and r->>'unchanged' is null,
+    case when r->>'unchanged' is not null then 'UNCHANGED' else r->>'code' end, g, v_card::text);
 end $$;
 
 create function t.bench_name(g int, s int, k int) returns void language plpgsql as $$
@@ -38,5 +40,6 @@ begin
   select * into v_cat from public.group_categories where group_id = v_gid and label_no = k;
   perform pg_sleep(random() * 0.003);
   r := public.group_update_category(v_sid, v_tok, v_cat.id, 'name', 'S' || s || '-' || to_char(clock_timestamp(), 'SSSS.US'), v_cat.name_rev);
-  insert into t.log values ('name', (r->>'ok')::boolean, r->>'code', g, v_cat.id::text);
+  insert into t.log values ('name', (r->>'ok')::boolean and r->>'unchanged' is null,
+    case when r->>'unchanged' is not null then 'UNCHANGED' else r->>'code' end, g, v_cat.id::text);
 end $$;

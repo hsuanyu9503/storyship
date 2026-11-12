@@ -13,7 +13,8 @@ declare t text;
 begin
   foreach t in array array['teachers','content_sets','story_cards','intro_stories','intro_clues','genres',
                            'sessions','session_state','groups','participants','personal_boards',
-                           'personal_snapshots','group_categories','group_placements','group_locks','group_snapshots']
+                           'personal_snapshots','group_categories','group_placements','group_locks','group_snapshots',
+                           'group_category_tombstones']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from anon, authenticated, public', t);
@@ -71,7 +72,7 @@ create policy group_categories_owner on public.group_categories for select to au
   using (exists (select 1 from public.groups g where g.id = group_id and app.is_session_teacher(g.session_id)));
 create policy group_placements_owner on public.group_placements for select to authenticated
   using (exists (select 1 from public.groups g where g.id = group_id and app.is_session_teacher(g.session_id)));
--- group_locks：不開放直接讀取
+-- group_locks、group_category_tombstones：不開放直接讀取
 
 -- ---------- 函式授權 ----------
 -- 先收回所有函式的預設執行權，再逐一開放
@@ -92,7 +93,7 @@ grant execute on function
   public.student_submit_personal(uuid, text, bigint),
   public.student_reopen_personal(uuid, text),
   public.student_group_board(uuid, text),
-  public.group_add_category(uuid, text),
+  public.group_add_category(uuid, text, uuid),
   public.group_move_card(uuid, text, uuid, uuid, bigint),
   public.group_update_category(uuid, text, uuid, text, text, bigint),
   public.group_delete_category(uuid, text, uuid),

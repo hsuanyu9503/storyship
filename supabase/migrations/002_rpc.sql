@@ -3,6 +3,17 @@
 -- 前置：001_init.sql
 -- =====================================================================
 
+-- ---------------------------------------------------------------------
+-- Phase 3 新增的資料表（可重複執行；已存在時略過，不影響既有資料）
+-- 已刪除分類的紀錄：避免延遲送達的「新增分類」重送請求，把組員剛刪除的分類重建回來。
+-- ---------------------------------------------------------------------
+create table if not exists public.group_category_tombstones (
+  category_id uuid primary key,
+  group_id    uuid not null references public.groups(id) on delete cascade,
+  deleted_at  timestamptz not null default now()
+);
+create index if not exists group_category_tombstones_group on public.group_category_tombstones (group_id);
+
 -- =====================================================================
 -- 教師端
 -- =====================================================================
@@ -108,10 +119,7 @@ begin
       if not coalesce(p_lock_unsubmitted, false) then
         return jsonb_build_object('ok', false, 'code', 'UNSUBMITTED_GROUPS', 'groups', to_jsonb(v_open));
       end if;
-      for g in select id from public.groups where session_id = p_session and status = 'open' loop
-        perform app.snapshot_group(g.id, 'locked');
-        update public.groups set status = 'locked' where id = g.id;
-      end loop;
+      perform app.lock_open_groups(p_session);
     end if;
   end if;
 
@@ -141,12 +149,7 @@ begin
   if s.status = 'ended' then return; end if;
   select * into st from public.session_state where session_id = p_session for update;
   if st.phase <= '03' then perform app.snapshot_personal(p_session); end if;
-  if st.phase <= '04' then
-    for g in select id from public.groups where session_id = p_session and status = 'open' loop
-      perform app.snapshot_group(g.id, 'locked');
-      update public.groups set status = 'locked' where id = g.id;
-    end loop;
-  end if;
+  if st.phase <= '04' then perform app.lock_open_groups(p_session); end if;
   delete from public.group_locks gl using public.groups gg where gl.group_id = gg.id and gg.session_id = p_session;
   update public.sessions set status = 'ended', ended_at = now(), join_open = false where id = p_session;
   update public.session_state set rev = rev + 1, updated_at = now() where session_id = p_session;
@@ -172,13 +175,19 @@ begin
   return jsonb_build_object('deleted', n);
 end $$;
 
+-- 重新開放指定小組：只限第四環節（第五環節以後須先返回 04 再明確重新開放）。
+-- 先前的提交快照全部保留；再次提交會建立新的快照版本。
 create or replace function public.teacher_unlock_group(p_group uuid)
 returns void language plpgsql security definer set search_path = public, pg_temp as $$
-declare v_session uuid;
+declare v_session uuid; s public.sessions; st public.session_state;
 begin
   select session_id into v_session from public.groups where id = p_group;
   if v_session is null then raise exception 'NO_GROUP'; end if;
-  perform app.own_session(v_session);
+  s := app.own_session(v_session);
+  if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
+  select * into st from public.session_state where session_id = v_session for update;
+  if st.phase <> '04' then raise exception 'NOT_AVAILABLE'; end if;
+  perform 1 from public.groups where id = p_group for update;
   update public.groups set status = 'open', submitted_at = null where id = p_group;
   perform app.bump_board(p_group);
 end $$;
@@ -494,6 +503,93 @@ end $$;
 --   * 故事歸屬、分類名稱、分類理由各自有版本號；過期版本一律拒絕並回傳最新值。
 --   * 文字欄位與拖曳中的故事卡可取得 15 秒操作鎖（需持續續約，斷線即自動失效）。
 -- ---------------------------------------------------------------------
+-- Phase 3：以下內部函式覆蓋 001_init.sql 中的版本（001 不可重跑，因此修正放在本檔）
+--
+-- 鎖定順序（避免死結、保證快照一致）：所有寫入一律「先 session_state、再 groups」。
+--   學生：session_state FOR SHARE → groups FOR UPDATE（同組寫入依序執行，不同組互不阻塞）
+--   教師切換環節／暫停／結束：session_state FOR UPDATE（等所有進行中的學生寫入完成，並阻擋新的寫入）
+-- 因此教師建立快照、鎖定小組之後，不可能再有舊的學生操作寫入。
+create or replace function app.group_edit_ctx(p_session uuid, p_token text,
+  out participant_id uuid, out group_id uuid, out content_set_id uuid)
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare p public.participants; g public.groups; s public.sessions; st public.session_state;
+begin
+  p := app.active_participant(p_session, p_token);
+  select * into st from public.session_state where session_id = p_session for share;
+  select * into s from public.sessions where id = p_session;
+  select * into g from public.groups where id = p.group_id for update;
+  if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
+  if st.phase <> '04' then raise exception 'NOT_AVAILABLE'; end if;
+  if st.editing_paused then raise exception 'PAUSED'; end if;
+  if g.status <> 'open' then raise exception 'SUBMITTED'; end if;
+  participant_id := p.id; group_id := g.id; content_set_id := s.content_set_id;
+end $$;
+
+-- 完整性檢查（只檢查是否完成，不判斷分類對錯）；暫時名稱「分類 N」不算命名
+create or replace function app.group_problems(p_group uuid) returns jsonb
+language sql stable security definer set search_path = public, pg_temp as $$
+  with g as (select g.id, s.content_set_id from public.groups g join public.sessions s on s.id = g.session_id where g.id = p_group),
+       cards as (select sc.id from public.story_cards sc, g where sc.content_set_id = g.content_set_id),
+       unplaced as (select count(*) n from cards where not exists (
+         select 1 from public.group_placements gp where gp.group_id = p_group and gp.card_id = cards.id and gp.category_id is not null)),
+       used as (select c.* from public.group_categories c where c.group_id = p_group
+                  and exists (select 1 from public.group_placements gp join cards on cards.id = gp.card_id where gp.category_id = c.id))
+  select jsonb_build_object(
+    'total', (select count(*) from cards),
+    'unplaced', (select n from unplaced),
+    'used', (select count(*) from used),
+    'unnamed',  coalesce((select jsonb_agg(id order by label_no) from used where app.is_temp_name(name)), '[]'::jsonb),
+    'unnamed_no', coalesce((select jsonb_agg(label_no order by label_no) from used where app.is_temp_name(name)), '[]'::jsonb),
+    'no_reason', coalesce((select jsonb_agg(id order by label_no) from used where btrim(reason) = ''), '[]'::jsonb),
+    'no_reason_no', coalesce((select jsonb_agg(label_no order by label_no) from used where btrim(reason) = ''), '[]'::jsonb),
+    'complete', (select n from unplaced) = 0
+                and not exists (select 1 from used where app.is_temp_name(name) or btrim(reason) = ''));
+$$;
+
+-- 小組成果（快照與 Phase 4 使用）：只含有故事的分類，依分類順序排列，每個分類附故事清單
+--   {"categories":[{"id","order","label_no","name","reason","cards":[故事 id…]}],
+--    "placements":[{"card_id","category_id"}], "unplaced":[故事 id…]}
+create or replace function app.group_result_json(p_group uuid) returns jsonb
+language sql stable security definer set search_path = public, pg_temp as $$
+  with g as (select g.id, s.content_set_id from public.groups g join public.sessions s on s.id = g.session_id where g.id = p_group),
+       cards as (select sc.id, sc.sort_order, sc.slug from public.story_cards sc, g where sc.content_set_id = g.content_set_id),
+       pl as (select cards.id card_id, cards.sort_order, cards.slug, gp.category_id
+                from cards left join public.group_placements gp on gp.group_id = p_group and gp.card_id = cards.id),
+       used as (select c.*, row_number() over (order by c.label_no, c.created_at) ord from public.group_categories c
+                 where c.group_id = p_group and exists (select 1 from pl where pl.category_id = c.id))
+  select jsonb_build_object(
+    'categories', coalesce((select jsonb_agg(jsonb_build_object('id', u.id, 'order', u.ord, 'label_no', u.label_no,
+        'name', btrim(u.name), 'reason', btrim(u.reason),
+        'cards', (select jsonb_agg(pl.card_id order by pl.sort_order, pl.slug) from pl where pl.category_id = u.id)) order by u.ord)
+      from used u), '[]'::jsonb),
+    'placements', coalesce((select jsonb_agg(jsonb_build_object('card_id', pl.card_id, 'category_id', pl.category_id)
+        order by pl.sort_order, pl.slug) from pl), '[]'::jsonb),
+    'unplaced', coalesce((select jsonb_agg(pl.card_id order by pl.sort_order, pl.slug) from pl where pl.category_id is null), '[]'::jsonb));
+$$;
+
+create or replace function app.snapshot_group(p_group uuid, p_kind text) returns void
+language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  insert into public.group_snapshots (group_id, session_id, kind, data, is_complete, board_rev)
+  select g.id, g.session_id, p_kind, app.group_result_json(g.id),
+         -- 教師結束時保存的成果，即使資料完整也不算學生正式提交
+         p_kind = 'submitted' and (app.group_problems(g.id) ->> 'complete')::boolean, g.board_rev
+    from public.groups g where g.id = p_group;
+end $$;
+
+-- 鎖定所有仍可編輯的小組並保存當下成果（教師結束共同分類、結束場次時）。
+-- 呼叫前必須已持有 session_state 的 FOR UPDATE 鎖。
+create or replace function app.lock_open_groups(p_session uuid) returns void
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare g record;
+begin
+  for g in select id from public.groups where session_id = p_session and status = 'open' order by number for update loop
+    perform app.snapshot_group(g.id, 'locked');
+    update public.groups set status = 'locked' where id = g.id;
+    perform app.bump_board(g.id);
+  end loop;
+end $$;
+
 create or replace function public.student_group_board(p_session uuid, p_token text)
 returns jsonb language plpgsql stable security definer set search_path = public, pg_temp as $$
 declare p public.participants; g public.groups; st public.session_state; s public.sessions;
@@ -504,23 +600,40 @@ begin
   if st.phase < '04' then raise exception 'NOT_AVAILABLE'; end if;
   select * into g from public.groups where id = p.group_id;
   return app.group_board_json(g.id) || jsonb_build_object(
-    'group_number', g.number, 'group_name', g.name, 'status', g.status, 'board_rev', g.board_rev,
+    'group_id', g.id, 'group_number', g.number, 'group_name', g.name, 'status', g.status, 'board_rev', g.board_rev,
+    'paused', st.editing_paused, 'phase', st.phase,
     'can_edit', s.status = 'active' and st.phase = '04' and not st.editing_paused and g.status = 'open',
     'problems', app.group_problems(g.id),
     'locks', coalesce((select jsonb_agg(jsonb_build_object('target', target, 'mine', participant_id = p.id))
                          from public.group_locks where group_id = g.id and expires_at > now()), '[]'::jsonb));
 end $$;
 
-create or replace function public.group_add_category(p_session uuid, p_token text)
+-- 新增分類。p_category：前端產生的分類 id（UUID），同時作為操作識別碼：
+-- 網路逾時後重送同一個請求時，不會建立第二個分類，而是回傳第一次的結果。
+drop function if exists public.group_add_category(uuid, text);
+create or replace function public.group_add_category(p_session uuid, p_token text, p_category uuid default null)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
-declare c record; v_no int; v_cat public.group_categories;
+declare c record; v_no int; v_cat public.group_categories; v_rev bigint;
 begin
   select * into c from app.group_edit_ctx(p_session, p_token);
+  if p_category is not null then
+    if exists (select 1 from public.group_category_tombstones where category_id = p_category) then
+      return jsonb_build_object('ok', false, 'code', 'DELETED');   -- 已被刪除：不重建
+    end if;
+    select * into v_cat from public.group_categories where id = p_category;
+    if found then
+      if v_cat.group_id <> c.group_id then raise exception 'BAD_DATA'; end if;
+      select board_rev into v_rev from public.groups where id = c.group_id;
+      return jsonb_build_object('ok', true, 'category_id', v_cat.id, 'label_no', v_cat.label_no, 'board_rev', v_rev, 'duplicate', true);
+    end if;
+  end if;
   if (select count(*) from public.group_categories where group_id = c.group_id) >= 20 then
     raise exception 'TOO_MANY';
   end if;
+  -- 小組列已鎖定，同組同時新增會依序取得不同的編號
   select coalesce(max(label_no), 0) + 1 into v_no from public.group_categories where group_id = c.group_id;
-  insert into public.group_categories (group_id, label_no) values (c.group_id, v_no) returning * into v_cat;
+  insert into public.group_categories (id, group_id, label_no) values (coalesce(p_category, gen_random_uuid()), c.group_id, v_no)
+  returning * into v_cat;
   return jsonb_build_object('ok', true, 'category_id', v_cat.id, 'label_no', v_no, 'board_rev', app.bump_board(c.group_id));
 end $$;
 
@@ -544,6 +657,11 @@ begin
   select rev, category_id into v_rev, v_cur from public.group_placements where group_id = c.group_id and card_id = p_card;
   v_rev := coalesce(v_rev, 0);
   if v_rev <> p_expected_rev then
+    -- 重送或他人已把卡放到同一位置：結果已符合要求，不重複寫入
+    if v_cur is not distinct from p_category then
+      return jsonb_build_object('ok', true, 'rev', v_rev, 'category_id', v_cur, 'unchanged', true,
+                                'board_rev', (select board_rev from public.groups where id = c.group_id));
+    end if;
     return jsonb_build_object('ok', false, 'code', 'STALE', 'rev', v_rev, 'category_id', v_cur);
   end if;
   insert into public.group_placements (group_id, card_id, category_id, rev, updated_at)
@@ -575,6 +693,10 @@ begin
   end if;
   v_cur_rev := case p_field when 'name' then v_cat.name_rev else v_cat.reason_rev end;
   if v_cur_rev <> p_expected_rev then
+    if v_val = (case p_field when 'name' then v_cat.name else v_cat.reason end) then
+      return jsonb_build_object('ok', true, 'rev', v_cur_rev, 'unchanged', true,
+                                'board_rev', (select board_rev from public.groups where id = c.group_id));
+    end if;
     return jsonb_build_object('ok', false, 'code', 'STALE', 'rev', v_cur_rev,
       'value', case p_field when 'name' then v_cat.name else v_cat.reason end);
   end if;
@@ -608,6 +730,8 @@ begin
   delete from public.group_locks where group_id = c.group_id
      and target in ('name:' || p_category, 'reason:' || p_category);
   delete from public.group_categories where id = p_category;
+  insert into public.group_category_tombstones (category_id, group_id) values (p_category, c.group_id)
+  on conflict (category_id) do nothing;
   return jsonb_build_object('ok', true, 'board_rev', app.bump_board(c.group_id));
 end $$;
 
@@ -641,15 +765,32 @@ begin
   return jsonb_build_object('ok', true, 'expires_at', v_exp);
 end $$;
 
--- 提交小組成果：必須基於最新版本（p_expected_board_rev），且資料完整
+-- 提交小組成果（同一個交易內完成：驗證 → 建立快照 → 改為已提交 → 清除操作鎖 → 更新版本）
+--   * 必須基於最新版本（p_expected_board_rev）
+--   * 其他組員正在輸入名稱／理由或拖曳故事時回傳 EDITING（避免遺漏他們尚未送出的內容）
+--   * 兩人同時提交：第二個請求等第一個完成後回傳 ALREADY_SUBMITTED，不會產生第二份快照
 create or replace function public.group_submit(p_session uuid, p_token text, p_expected_board_rev bigint)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
-declare c record; g public.groups; v_prob jsonb;
+declare c record; g public.groups; v_prob jsonb; v_editing jsonb;
 begin
-  select * into c from app.group_edit_ctx(p_session, p_token);
+  begin
+    select * into c from app.group_edit_ctx(p_session, p_token);
+  exception when raise_exception then
+    if sqlerrm = 'SUBMITTED' then
+      select g2.* into g from public.groups g2 join public.participants p on p.group_id = g2.id
+       where p.session_id = p_session and p.token_hash = app.hash_token(p_token);
+      return jsonb_build_object('ok', false, 'code', 'ALREADY_SUBMITTED', 'status', g.status, 'board_rev', g.board_rev);
+    end if;
+    raise;
+  end;
   select * into g from public.groups where id = c.group_id;
   if g.board_rev <> p_expected_board_rev then
     return jsonb_build_object('ok', false, 'code', 'STALE', 'board_rev', g.board_rev);
+  end if;
+  select jsonb_agg(target) into v_editing from public.group_locks
+   where group_id = c.group_id and expires_at > now() and participant_id <> c.participant_id;
+  if v_editing is not null then
+    return jsonb_build_object('ok', false, 'code', 'EDITING', 'targets', v_editing);
   end if;
   v_prob := app.group_problems(c.group_id);
   if not (v_prob ->> 'complete')::boolean then

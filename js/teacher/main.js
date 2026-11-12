@@ -174,12 +174,14 @@ async function loadLive(sessionId) {
   const [pub, st, groups, people, boards, snaps] = await Promise.all([
     rpc(client, 'projector_state', { p_session: sessionId, p_key: null }),
     client.from('session_state').select('*').eq('session_id', sessionId).single(),
-    client.from('groups').select('*').eq('session_id', sessionId).order('number'),
+    client.from('groups').select('*, group_categories(*), group_placements(*)').eq('session_id', sessionId).order('number'),
     client.from('participants').select('id,group_id,seat_label,status,joined_at,last_seen_at').eq('session_id', sessionId).order('joined_at'),
     client.from('personal_boards').select('participant_id,rev,updated_at,submitted_at,data').eq('session_id', sessionId),
     client.from('personal_snapshots').select('participant_id,is_complete,submitted,data,taken_at').eq('session_id', sessionId),
   ]);
   for (const r of [st, groups, people, boards, snaps]) if (r.error) throw Object.assign(new Error(r.error.message), { code: 'NETWORK' });
+  const gsnaps = await client.from('group_snapshots').select('id,group_id,kind,is_complete,board_rev,created_at').eq('session_id', sessionId);
+  S.groupSnaps = gsnaps.error ? [] : gsnaps.data;
   S.pub = pub;
   S.state = st.data;
   S.groups = groups.data;
@@ -220,11 +222,15 @@ async function publish(phase, sub, projection, { lock = false } = {}) {
     if (!r.ok && r.code === 'STALE') { toast('狀態已在其他裝置變更，已重新載入。', 'warn'); await S.sync.refresh(); return false; }
     if (!r.ok && r.code === 'UNSUBMITTED_GROUPS') {
       S.busy = false;
+      const rows = S.groups.map(groupProgress);
       const go = await confirmDialog({
         title: '仍有小組尚未提交',
-        body: `第 ${r.groups.join('、')} 組尚未提交小組成果。`,
+        body: h('div',
+          h('p', `第 ${r.groups.join('、')} 組尚未提交小組成果。`),
+          h('ul.small', rows.map((x) => h('li', `${x.g.name}：${STATUS_TEXT[x.g.status]}（已分類 ${x.placed}/${x.total}，理由 ${x.reasons}/${x.used}）`))),
+          h('p.muted', '確認結束後，所有小組停止編輯；未提交的組別保存目前伺服器上的成果，並標示為「教師結束保存」（不算正式提交）。')),
         buttons: [{ label: '繼續等待', value: false },
-                  { label: '鎖定目前已儲存的成果並前往', value: true, primary: true }],
+                  { label: '確認結束，保存各組目前成果', value: true, primary: true }],
       });
       return go ? publish(phase, sub, projection, { lock: true }) : false;
     }
@@ -276,7 +282,8 @@ function renderAll(force = false) {
   if (changed('head', [st.rev, S.session.status, S.session.join_open, S.sync?.status])) renderHead();
   if (changed('steps', [st.phase, S.session.status])) renderSteps();
   if (changed('panel', [st.rev, S.session.join_open, S.session.status, S.genrePreview,
-    S.groups.map((g) => [g.status, g.board_rev]), S.people.length, onlineCount(S.people),
+    S.groups.map((g) => [g.status, g.board_rev]), S.people.length, onlineCount(S.people), (S.groupSnaps || []).length,
+    S.state.phase === '04' ? S.groups.map((g) => onlineCount(S.people.filter((p) => p.group_id === g.id))) : 0,
     S.personal.boards, S.personal.submitted, S.personal.digest, S.personal.snapshots, [...S.ppOpen],
     S.state.phase === '03' ? S.people.map((p) => [p.id, p.group_id, p.status, isOnline(p)]) : 0])) renderPanel();
   if (changed('previews', [S.pub?.rev, S.genrePreview, st.phase])) renderPreviews();
@@ -444,17 +451,7 @@ const PANELS = {
 
   '03': () => panelPersonal(),
 
-  '04': () => h('div',
-    h('table.tbl', h('thead', h('tr', h('th', '組別'), h('th', '狀態'), h('th', '版本'), h('th', ''))),
-      h('tbody', S.groups.map((g) => h('tr',
-        h('td', g.name),
-        h('td', { open: '編輯中', submitted: '已提交', locked: '已鎖定' }[g.status]),
-        h('td.mono', g.board_rev),
-        h('td', g.status !== 'open' ? h('button', { onclick: async () => {
-          try { await rpc(client, 'teacher_unlock_group', { p_group: g.id }); toast(`${g.name} 已重新開放`); S.sync.refresh(); }
-          catch (e) { toast(errorText(e), 'error'); } } }, '單組解鎖') : null))))),
-    h('p.muted', '（小組共同編輯畫面與單組檢視將於 Phase 3 完成；資料庫端的同步、衝突保護與提交已完成並通過 tests/db 測試。）'),
-    h('button.primary', { onclick: () => goPhase('05') }, '結束共同分類，進入成果公開 →')),
+  '04': () => panelGroups(),
 
   '05': () => h('div', h('p.muted', '雙組並排比較、故事追蹤與理由揭露將於 Phase 4 完成。'),
     h('button.primary', { onclick: () => goPhase('06') }, '進入第六環節 →')),
@@ -588,6 +585,86 @@ function panelPersonal() {
               h('td', h('button.small', { type: 'button', onclick: () => viewBoard(r, g) }, '查看'))))))))];
       }))),
     h('p.muted', '「查看」只在本機開啟，不會出現在投影上。學生的個人分類彼此獨立，同組同學也看不到彼此的成果。'));
+}
+
+// ----------------------------------------------------------------------
+// 04｜小組共作：進度、檢視、暫停、重新開放、結束
+// ----------------------------------------------------------------------
+const STATUS_TEXT = { open: '編輯中', submitted: '已提交', locked: '教師結束保存' };
+
+// 由實際資料計算（依故事 id 計算已分類數量）
+function groupProgress(g) {
+  const cardIds = new Set(S.content.cards.map((c) => c.id));
+  const cats = g.group_categories || [];
+  const catIds = new Set(cats.map((c) => c.id));
+  const placed = new Set((g.group_placements || []).filter((p) => p.category_id && catIds.has(p.category_id) && cardIds.has(p.card_id)).map((p) => p.card_id));
+  const usedIds = new Set((g.group_placements || []).filter((p) => p.category_id && cardIds.has(p.card_id)).map((p) => p.category_id));
+  const used = cats.filter((c) => usedIds.has(c.id));
+  const members = S.people.filter((p) => p.group_id === g.id && p.status === 'active');
+  const snaps = (S.groupSnaps || []).filter((x) => x.group_id === g.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return { g, total: cardIds.size, placed: placed.size, used: used.length,
+           reasons: used.filter((c) => (c.reason || '').trim()).length, members, online: onlineCount(members), snaps };
+}
+
+function groupBoardData(g) {
+  const placements = {};
+  for (const p of g.group_placements || []) if (p.category_id) placements[p.card_id] = p.category_id;
+  return { categories: (g.group_categories || []).slice().sort((a, b) => a.label_no - b.label_no)
+             .map((c) => ({ id: c.id, no: c.label_no, name: c.name, reason: c.reason })), placements };
+}
+
+function viewGroup(g) {
+  const v = createBoardView({ cards: S.content.cards, title: `${g.name} 的小組分類（僅教師可見，不會投影）`,
+    categoriesTitle: '小組分類', readOnly: true, embedded: true, reasons: true });
+  v.setData(groupBoardData(g));
+  const x = groupProgress(g);
+  v.setNotice(h('div.bd-notice' + (g.status === 'open' ? '' : '.info'),
+    `${STATUS_TEXT[g.status]}　已分類 ${x.placed}/${x.total}　理由 ${x.reasons}/${x.used}` +
+    (x.snaps.length ? `　已保存 ${x.snaps.length} 份成果` : '')));
+  const dlg = h('dialog.dialog.wide', v.el,
+    h('div.dialog-actions', h('button.primary', { type: 'button', onclick: () => { dlg.close(); dlg.remove(); v.destroy(); } }, '關閉')));
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+}
+
+async function reopenGroup(g) {
+  const ok = await confirmDialog({ title: `重新開放${g.name}？`,
+    body: '該組可以繼續修改目前的小組分類；先前保存的成果會保留，再次提交時建立新的版本。其他組不受影響。',
+    buttons: [{ label: '取消', value: false }, { label: '重新開放', value: true, primary: true }] });
+  if (!ok) return;
+  try { await rpc(client, 'teacher_unlock_group', { p_group: g.id }); toast(`${g.name} 已重新開放`); S.sync.ping('state'); S.sync.refresh(); }
+  catch (e) { toast(errorText(e), 'error'); }
+}
+
+function panelGroups() {
+  const rows = S.groups.map(groupProgress);
+  const paused = S.state.editing_paused;
+  const ended = S.session.status === 'ended';
+  const wrap = S.pub?.projection?.title === '整理並提交';
+  return h('div',
+    h('div.pp-summary',
+      h('span.stat', '已提交', h('b', rows.filter((x) => x.g.status === 'submitted').length), ` / ${rows.length} 組`),
+      h('span.stat', '在線', h('b', onlineCount(S.people)))),
+    paused ? h('p.pill.warn', '已暫停全班編輯：學生可以閱讀，但不能修改。已提交的組維持已提交。') : null,
+    h('div.btn-grid',
+      ended ? null : h('button', { onclick: () => setFlags({ p_editing_paused: !paused }) }, paused ? '恢復全班編輯' : '暫停全班編輯'),
+      wrap ? h('button', { onclick: () => publish('04', '04', P.instructionProjection('04')) }, '投影：返回任務引導')
+           : h('button', { onclick: () => publish('04', '04-wrap', P.groupWrapProjection()) }, '投影：提醒整理並提交'),
+      ended ? null : h('button.primary', { onclick: () => goPhase('05') }, '結束共同分類，進入第五環節 →')),
+    h('table.tbl.gp-table',
+      h('thead', h('tr', h('th', '組別'), h('th', '已分類'), h('th', '分類數'), h('th', '理由完成'), h('th', '狀態'), h('th', '連線'), h('th', ''))),
+      h('tbody', rows.map((x) => h('tr',
+        h('td', h('b', x.g.name)),
+        h('td', h('span.pp-bar', h('span', { style: { width: (x.total ? x.placed / x.total * 100 : 0) + '%' } })), `${x.placed}/${x.total}`),
+        h('td', x.used),
+        h('td', `${x.reasons}/${x.used}`),
+        h('td', x.g.status === 'open' ? h('span.tag', '編輯中') : x.g.status === 'submitted' ? h('span.tag.pub', '已提交') : h('span.tag.warn', '教師結束保存')),
+        h('td.gp-members', `${x.online}/${x.members.length} 在線`),
+        h('td.gp-actions',
+          h('button.small', { type: 'button', onclick: () => viewGroup(x.g) }, '查看'),
+          x.g.status !== 'open' && !ended ? h('button.small', { type: 'button', onclick: () => reopenGroup(x.g) }, '重新開放') : null))))),
+    h('p.muted', '「查看」只在本機開啟，不會出現在投影上，也不會讓其他組看到。教師不直接修改學生的分類。'));
 }
 
 // ----------------------------------------------------------------------

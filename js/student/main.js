@@ -4,7 +4,7 @@ import { createSync } from '../lib/sync.js';
 import { h, mount, confirmDialog } from '../lib/dom.js';
 import { STUDENT_VIEW, STUDENT_TEXT, TEXT } from '../lib/phases.js';
 import { createPersonal } from './personal.js';
-import { createBoardView } from '../lib/board-view.js';
+import { createGroup } from './group.js';
 
 const root = document.getElementById('app');
 const client = configured ? makeClient('student') : null;
@@ -13,6 +13,7 @@ let code = (params.get('code') || '').trim().toUpperCase();
 let sync = null;
 let lastKey = '';
 let personal = null;   // 03 個人分類工作區（保持同一個實體，避免同步時打斷操作）
+let group = null;      // 04 小組共作工作區（同上；換組或換場次時才重建）
 let explore = false;   // 學生已按下「進入探索模式」
 
 // ---------- 匿名、可恢復的裝置識別 ----------
@@ -129,6 +130,7 @@ function runSession(sessionId) {
 function renderState(sessionId, token, st) {
   if (st.removed) {
     if (personal) { personal.destroy(); personal = null; }
+    if (group) { group.destroy(); group = null; }
     const k = 'removed';
     if (lastKey === k) return; lastKey = k;
     return screenMsg('已離開小組', '老師已將你移出小組。', st.join_open
@@ -150,6 +152,21 @@ function renderState(sessionId, token, st) {
     return;
   }
   if (personal) { personal.destroy(); personal = null; }
+
+  // 04：小組共作工作區同樣自行處理後續更新；即時資料更新時不卸載畫面（閱讀視窗、捲動位置、輸入中的文字都保留）
+  if (view === 'group') {
+    const gkey = sessionId + ':' + st.me.group_number;
+    if (!group || group.key !== gkey) {
+      group?.destroy();
+      group = createGroup({ client, sessionId, token, groupNumber: st.me.group_number,
+        onPing: (ev) => { if (ev) sync.ping(ev); sync.refresh(); } });
+      lastKey = 'group';
+      shell(group.el);
+    }
+    group.update(st);
+    return;
+  }
+  if (group) { group.destroy(); group = null; }
   // 只有影響畫面的欄位改變才重畫，避免打斷學生操作
   const key = [view, st.state.phase, st.me.group_number, st.me.seat_label, st.state.focus_mode, explore,
                st.can.personal_edit, st.can.group_edit, st.state.editing_paused].join('|');
@@ -174,11 +191,6 @@ function renderState(sessionId, token, st) {
         : h('button.primary.s-big', { type: 'button', onclick: enterExplore }, '進入探索模式'),
       h('p.s-note', '平板建議橫向使用')));
   }
-  if (view === 'group') {
-    return shell(header, h('div.s-center', h('h1', '故事找朋友：小組共作'),
-      h('p.s-lead', TEXT.group), h('p.s-note', '（小組共同編輯畫面將於 Phase 3 完成）')),
-      myPersonalPanel(sessionId, token));
-  }
 }
 
 async function enterExplore() {
@@ -190,36 +202,6 @@ async function enterExplore() {
   } catch { /* 不支援時使用網站專注模式即可 */ }
   lastKey = '';
   sync?.refresh();
-}
-
-// 我的個人分類（唯讀快照）：預設收合，按鍵展開；可重新閱讀故事，不可修改。
-// Phase 3 小組共作畫面左側會沿用此面板。
-function myPersonalPanel(sessionId, token) {
-  const body = h('div.mp-body', { hidden: true });
-  let loaded = false;
-  const btn = h('button.s-big', { type: 'button', 'aria-expanded': 'false', onclick: async () => {
-    const open = body.hidden;
-    body.hidden = !open;
-    btn.setAttribute('aria-expanded', String(open));
-    btn.textContent = open ? '收合我的個人分類' : '查看我的個人分類';
-    if (!open || loaded) return;
-    body.replaceChildren(h('p.muted', '載入中…'));
-    try {
-      const [cards, p] = await Promise.all([
-        rpc(client, 'student_cards', { p_session: sessionId, p_token: token }),
-        rpc(client, 'student_personal', { p_session: sessionId, p_token: token }),
-      ]);
-      const snap = p.snapshot;
-      const v = createBoardView({ cards, title: '我的個人分類（唯讀）', readOnly: true, embedded: true });
-      v.setData(snap ? snap.data : p.data);
-      if (snap && !snap.is_complete) v.setNotice(h('div.bd-notice', '老師結束個人分類時尚未完成，這是當時已儲存的部分。'));
-      body.replaceChildren(v.el);
-      loaded = true;
-    } catch (e) {
-      body.replaceChildren(h('p.s-error', errorText(e)));
-    }
-  } }, '查看我的個人分類');
-  return h('section.mp', btn, body);
 }
 
 start();

@@ -7,7 +7,17 @@
 //   view.setStatus(node)    標題列右側的狀態（只在需要時顯示）
 //   view.setNotice(node)    標題下方的提示列
 //   view.setFooter(node)    右側底部（完成按鈕），固定可見，不隨分類增加而被推出畫面
-//   onChange(data, kind)    使用者操作後的新資料；kind：add | move | delete | rename | rename-commit
+//   onChange(data, kind, info)  使用者操作後的新資料；kind：add | move | delete | rename | rename-commit |
+//                           reason | reason-commit；info：{ categoryId, cardId }
+//
+// Phase 3（小組共作）另外提供：
+//   reasons: true           每個分類顯示「共同特色」多行欄位
+//   view.setLocks(targets)  其他組員持有的操作鎖（Set：'card:<id>'、'name:<id>'、'reason:<id>'）：
+//                           該卡片暫時不能移動、該欄位暫時不能輸入（只鎖該卡／該欄位，不鎖整個工作區）
+//   onGrab(cardId) / onRelease(cardId)   選取或開始拖曳某張卡時（用來向伺服器取得卡片操作鎖）
+//   onFieldFocus(catId, field) / onFieldBlur(catId, field)   開始／結束輸入名稱或共同特色
+//   view.cancelGrab(cardId)  伺服器拒絕取得操作權時取消選取／拖曳
+//   variant: 'panel'         左側個人參考面板（單欄、唯讀）
 //
 // 觸控設計：點故事卡內容＝閱讀；拖曳只能從「⠿ 移動」把手開始（把手 touch-action:none，
 // 其他區域可正常捲動）；點一下把手＝選取，再點目標分類＝移動（平板主要操作方式）。
@@ -17,7 +27,12 @@ import * as M from './board-model.js';
 const DRAG_THRESHOLD = 6;
 
 export function createBoardView({ cards, title = '我的故事分類', categoriesTitle = '我的分類',
-                                  readOnly = false, onChange = () => {}, embedded = false }) {
+                                  readOnly = false, onChange = () => {}, embedded = false,
+                                  reasons = false, variant = '', confirmEveryDelete = false,
+                                  onGrab = () => {}, onRelease = () => {},
+                                  onFieldFocus = () => {}, onFieldBlur = () => {}, makeId = null }) {
+  let locks = new Set();    // 其他組員持有的操作鎖
+  let needRender = false;   // 按壓把手期間延後的重畫
   let data = M.emptyBoard();
   let ro = readOnly;
   let selected = null;      // 點選移動：目前選取的故事 id
@@ -40,7 +55,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
   const right = h('section.bd-right',
     h('div.bd-col-head', h('h2.bd-col-title', categoriesTitle), addBtn),
     h('div.bd-scroll', hint, catList), footer);
-  const el = h('div.bd' + (embedded ? '.bd-embedded' : ''),
+  const el = h('div.bd' + (embedded ? '.bd-embedded' : '') + (variant ? '.bd-' + variant : '') + (reasons ? '.bd-adaptive' : ''),
     h('header.bd-head', h('span.bd-title', title), statusSlot, count),
     noticeSlot, moveBar, h('div.bd-body', left, right));
 
@@ -50,7 +65,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
   // 以 pointerdown／pointerup 判斷「點一下」，不依賴 click：
   // 觸控時瀏覽器的 click 可能被省略，或在把手重畫後落到後方區域，造成誤判。
   // 手指在區域上捲動時瀏覽器會送出 pointercancel，因此捲動不會被當成點選。
-  const isControl = (t) => t.closest('.sc-grip, input, .bd-del, .bd-add, .bd-movebar');
+  const isControl = (t) => t.closest('.sc-grip, input, textarea, .bd-del, .bd-add, .bd-movebar');
   // 已在 pointerup 處理的點按，畫面會立刻重畫；瀏覽器隨後補送的 click 會落在新的元素上（例如開啟閱讀），一律忽略
   //（只忽略「同一位置、緊接著」的那一次 click；在別處的新點按照常處理）
   let ghostClick = null;
@@ -81,32 +96,33 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     commitMove(id, p.zone.dataset.drop || null);
   });
 
-  function emit(kind) { onChange(data, kind); }
+  function emit(kind, info = {}) { onChange(data, kind, info); }
 
   function commitMove(cardId, target) {
     if (target === '__new') {
-      const r = M.addCategory(data);
+      const r = M.addCategory(data, makeId);
       if (!r.id) return render();
       data = M.moveCard(r.data, cardId, r.id);
       render();
-      emit('add');
+      emit('add', { categoryId: r.id, cardId });
       scrollToCat(r.id);
       return;
     }
-    if ((data.placements[cardId] || null) === target) return render();
+    if ((data.placements[cardId] || null) === target) { onRelease(cardId); return render(); }
+    if (target && !data.categories.some((c) => c.id === target)) { onRelease(cardId); return render(); }
     data = M.moveCard(data, cardId, target);
     render();
-    emit('move');
+    emit('move', { cardId, categoryId: target });
   }
 
   function onAdd() {
     if (ro) return;
     if (selected) { const id = selected; selected = null; return commitMove(id, '__new'); }
-    const r = M.addCategory(data);
+    const r = M.addCategory(data, makeId);
     if (!r.id) return;
     data = r.data;
     render();
-    emit('add');
+    emit('add', { categoryId: r.id });
     scrollToCat(r.id);
   }
 
@@ -116,60 +132,89 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
   }
 
   async function onDelete(cat) {
+    if (!cat) return;
+    if (locks.has('name:' + cat.id) || locks.has('reason:' + cat.id)) return;   // 組員正在輸入：伺服器也會拒絕
     const n = M.cardsIn(data, cards, cat.id).length;
-    if (n > 0) {
+    if (n > 0 || confirmEveryDelete) {
       const ok = await confirmDialog({ title: `刪除「${M.displayName(cat)}」？`,
-        body: `裡面的 ${n} 張故事會回到「尚未分類」。`,
+        body: n > 0 ? `裡面的 ${n} 張故事會回到「尚未分類」。` : '這個分類裡沒有故事。',
         buttons: [{ label: '取消', value: false }, { label: '刪除分類', value: true, danger: true }] });
       if (!ok) return;
+      if (!data.categories.some((c) => c.id === cat.id)) return;   // 等待確認時已被組員刪除
     }
     data = M.deleteCategory(data, cat.id);
     render();
-    emit('delete');
+    emit('delete', { categoryId: cat.id });
   }
 
-  // ---------- 分類名稱：處理中文輸入法組字 ----------
-  function makeBox(cat) {
-    const input = h('input.bd-name', { type: 'text', maxlength: M.MAX_NAME, enterkeyhint: 'done',
-      autocomplete: 'off', 'aria-label': '分類名稱' });
+  // ---------- 分類名稱與共同特色：處理中文輸入法組字 ----------
+  // 組字中（compositionstart～compositionend）不送出，避免把未完成的注音反覆送到伺服器；
+  // 欄位有焦點時，外部更新不會改寫輸入框內容（游標不跳動、文字不消失）。
+  function bindText(el, field, getId, apply) {
     let composing = false;
     const push = (kind) => {
-      const id = input.dataset.cat;
-      data = M.renameCategory(data, id, input.value);
-      emit(kind);
+      if (el.readOnly) return;
+      data = apply(data, getId(), el.value);
+      emit(kind, { categoryId: getId(), field });
     };
-    input.addEventListener('compositionstart', () => { composing = true; });
-    input.addEventListener('compositionend', () => { composing = false; push('rename'); });
-    input.addEventListener('input', (e) => { if (!composing && !e.isComposing) push('rename'); });
-    input.addEventListener('blur', () => { if (!composing) push('rename-commit'); });
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) input.blur(); });
+    el.addEventListener('compositionstart', () => { composing = true; });
+    el.addEventListener('compositionend', () => { composing = false; push(field === 'name' ? 'rename' : 'reason'); });
+    el.addEventListener('input', (e) => { if (!composing && !e.isComposing) push(field === 'name' ? 'rename' : 'reason'); });
+    el.addEventListener('focus', () => { if (!el.readOnly) onFieldFocus(getId(), field); });
+    el.addEventListener('blur', () => {
+      if (!composing) push(field === 'name' ? 'rename-commit' : 'reason-commit');
+      onFieldBlur(getId(), field);
+    });
+    if (field === 'name') el.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) el.blur(); });
+  }
+
+  function makeBox(cat) {
+    const getId = () => box.dataset.drop;
+    const input = h('input.bd-name', { type: 'text', maxlength: M.MAX_NAME, enterkeyhint: 'done',
+      autocomplete: 'off', 'aria-label': '分類名稱' });
+    bindText(input, 'name', getId, M.renameCategory);
     const n = h('span.bd-cat-n');
     const nameText = h('span.bd-name-ro');
+    const nameLock = h('span.bd-lock', { hidden: true }, '組員輸入中…');
     const del = h('button.bd-del', { type: 'button', 'aria-label': '刪除分類' }, '✕');
     const body = h('div.bd-cat-body');
+    let reason = null; let reasonText = null; let reasonLock = null;
+    if (reasons) {
+      reason = h('textarea.bd-reason', { rows: 2, maxlength: M.MAX_REASON, placeholder: '這幾個故事有什麼共同特色？',
+        'aria-label': '共同特色' });
+      bindText(reason, 'reason', getId, M.setReason);
+      reasonText = h('p.bd-reason-ro');
+      reasonLock = h('span.bd-lock', { hidden: true }, '組員輸入中…');
+    }
     const box = h('div.bd-cat.bd-drop', { 'data-drop': cat.id },
-      h('div.bd-cat-head', input, nameText, n, del), body);
-    const rec = { box, input, nameText, n, body, del };
-    del.addEventListener('click', () => onDelete(data.categories.find((c) => c.id === input.dataset.cat)));
-    input.dataset.cat = cat.id;
-    return rec;
+      h('div.bd-cat-head', input, nameText, nameLock, n, del), body,
+      reasons ? h('div.bd-reason-wrap', h('span.bd-reason-label', '共同特色'), reason, reasonText, reasonLock) : null);
+    del.addEventListener('click', () => onDelete(data.categories.find((c) => c.id === getId())));
+    return { box, input, nameText, nameLock, n, body, del, reason, reasonText, reasonLock };
   }
 
   // ---------- 故事卡 ----------
   function card(c, variant) {
-    const grip = ro ? null : h('button.sc-grip', { type: 'button', 'aria-label': `移動「${c.title}」`,
-      'aria-pressed': selected === c.id ? 'true' : 'false' }, h('span.sc-grip-icon', '⠿'), h('span.sc-grip-label', '移動'));
-    const node = h('div.sc.sc-' + variant + (selected === c.id ? '.sc-selected' : ''), { 'data-card': c.id },
+    const lockedByOther = locks.has('card:' + c.id);
+    const grip = ro ? null : lockedByOther
+      ? h('span.sc-grip.sc-grip-locked', { 'aria-label': '組員操作中' }, h('span.sc-grip-icon', '…'), h('span.sc-grip-label', '組員操作中'))
+      : h('button.sc-grip', { type: 'button', 'aria-label': `移動「${c.title}」`,
+          'aria-pressed': selected === c.id ? 'true' : 'false' }, h('span.sc-grip-icon', '⠿'), h('span.sc-grip-label', '移動'));
+    const node = h('div.sc.sc-' + variant + (selected === c.id ? '.sc-selected' : '') + (lockedByOther ? '.sc-locked' : ''), { 'data-card': c.id },
       h('button.sc-read', { type: 'button', 'aria-label': `閱讀「${c.title}」`, onclick: () => openReader(c) },
         media(c.image_url, c.image_alt || '故事圖片', 'sc-img'),
         h('span.sc-text', h('span.sc-title', c.title), variant === 'full' ? h('span.sc-sum', c.summary) : null)),
       grip);
-    if (grip) attachGrip(grip, c);
+    if (grip && !lockedByOther) attachGrip(grip, c);
     return node;
   }
 
   function attachGrip(grip, c) {
-    const toggle = () => { selected = selected === c.id ? null : c.id; render(); };
+    const toggle = () => {
+      if (selected === c.id) { selected = null; onRelease(c.id); }
+      else { const prev = selected; selected = c.id; if (prev) onRelease(prev); onGrab(c.id); }
+      render();
+    };
     // 觸控／滑鼠的「點一下」在 pointerup 判斷（部分瀏覽器在觸控拖曳後會吞掉下一次 click）；
     // click 只處理鍵盤操作與不支援 pointer 事件的情況
     grip.addEventListener('click', (e) => { if (e.detail === 0) toggle(); });   // 鍵盤（Enter／空白鍵）
@@ -195,7 +240,9 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
 
   function startDrag(c) {
     drag.active = true;
+    if (selected && selected !== c.id) onRelease(selected);
     selected = null;
+    onGrab(c.id);
     moveBar.hidden = true;
     el.classList.remove('bd-moving');
     const ghost = h('div.sc-ghost', media(c.image_url, '', 'sc-img'), h('span', c.title));
@@ -234,14 +281,18 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     drag = null;
     if (!d) return;
     cancelAnimationFrame(d.raf);
-    if (pendingData) { data = pendingData; pendingData = null; if (!d.active) render(); }
+    if (pendingData || needRender) {
+      if (pendingData) data = pendingData;
+      pendingData = null; needRender = false;
+      if (!d.active) render();
+    }
     if (!d.active) { if (drop) d.grip._tap?.(); return; }   // 只是點一下：選取／取消選取
     d.ghost?.remove();
     d.target?.classList.remove('bd-over');
     el.classList.remove('bd-dragging');
     const target = drop && d.target ? (d.target.dataset.drop || null) : undefined;
     if (target !== undefined && !ro) commitMove(d.id, target);
-    else render();
+    else { onRelease(d.id); render(); }
   }
 
   // ---------- 閱讀視窗（不改變分類，關閉後回到原位置） ----------
@@ -264,6 +315,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
 
   // ---------- 繪製 ----------
   function render() {
+    if (selected && locks.has('card:' + selected)) selected = null;   // 組員已取得這張卡
     const placed = M.placedCount(data, cards);
     count.textContent = `已分類 ${placed} / ${cards.length}`;
     el.classList.toggle('bd-ro', ro);
@@ -273,6 +325,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     hint.hidden = ro || data.categories.length > 0;
 
     const un = M.unplacedCards(data, cards);
+    el.classList.toggle('bd-all-placed', un.length === 0);
     unplacedTitle.textContent = `尚未分類（${un.length}）`;
     unplacedList.replaceChildren(...(un.length ? un.map((c) => card(c, 'full'))
       : [h('p.bd-empty', ro ? '—' : '全部故事都已分類。')]));
@@ -284,13 +337,29 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
       let b = boxes.get(cat.id);
       if (!b) { b = makeBox(cat); boxes.set(cat.id, b); }
       const inCat = M.cardsIn(data, cards, cat.id);
-      if (document.activeElement !== b.input) b.input.value = cat.name;
+      const nameLocked = locks.has('name:' + cat.id);
+      if (document.activeElement !== b.input || nameLocked) b.input.value = cat.name;
       b.input.placeholder = M.tempName(cat);
       b.input.hidden = ro;
+      b.input.readOnly = nameLocked;
+      b.input.classList.toggle('bd-field-locked', nameLocked);
+      b.nameLock.hidden = ro || !nameLocked;
       b.nameText.hidden = !ro;
       b.nameText.textContent = M.displayName(cat);
       b.nameText.classList.toggle('temp', M.isTempName(cat.name));
+      if (b.reason) {
+        const rLocked = locks.has('reason:' + cat.id);
+        if (document.activeElement !== b.reason || rLocked) b.reason.value = cat.reason || '';
+        b.reason.hidden = ro;
+        b.reason.readOnly = rLocked;
+        b.reason.classList.toggle('bd-field-locked', rLocked);
+        b.reasonLock.hidden = ro || !rLocked;
+        b.reasonText.hidden = !ro;
+        b.reasonText.textContent = (cat.reason || '').trim() || '（尚未寫共同特色）';
+        b.reasonText.classList.toggle('temp', !(cat.reason || '').trim());
+      }
       b.del.hidden = ro;
+      b.del.disabled = nameLocked || locks.has('reason:' + cat.id);
       b.n.textContent = `${inCat.length} 張`;
       b.body.replaceChildren(...(inCat.length ? inCat.map((c) => card(c, 'compact'))
         : [h('p.bd-drop-hint', ro ? '（沒有故事）' : '把故事拖到這裡，或點故事的「移動」再點這裡')]));
@@ -306,7 +375,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
       moveBar.hidden = false;
       moveBar.replaceChildren(h('span', `已選取「${c?.title || ''}」：請點選要放入的分類`,
         data.placements[selected] ? '，或點「尚未分類」放回。' : '。'),
-        h('button', { type: 'button', onclick: () => { selected = null; render(); } }, '取消'));
+        h('button', { type: 'button', onclick: () => { const id = selected; selected = null; onRelease(id); render(); } }, '取消'));
     } else {
       moveBar.hidden = true;
     }
@@ -321,7 +390,8 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
       const next = M.normalize(d, cards);
       // 手指按在把手上時（含尚未開始拖曳）延後套用，避免重畫把手造成放開事件遺失
       if (drag) { pendingData = next; return; }
-      if (M.sameBoard(next, data) && next.categories.every((c, i) => c.name === data.categories[i]?.name)) return;
+      if (M.sameBoard(next, data) && next.categories.every((c, i) => c.name === data.categories[i]?.name
+          && (c.reason ?? '') === (data.categories[i]?.reason ?? ''))) return;
       data = next;
       if (selected && !cards.some((c) => c.id === selected)) selected = null;
       render();
@@ -335,7 +405,30 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     setStatus(node) { statusSlot.replaceChildren(...(node ? [node] : [])); },
     setNotice(node) { noticeSlot.replaceChildren(...(node ? [node] : [])); },
     setFooter(node) { footer.replaceChildren(...(node ? [node] : [])); footer.hidden = !node; },
-    isEditingName() { return [...boxes.values()].some((b) => b.input === document.activeElement); },
+    isEditingName() { return [...boxes.values()].some((b) => b.input === document.activeElement || b.reason === document.activeElement); },
+    // 目前正在輸入的欄位（{ categoryId, field }）
+    editingField() {
+      for (const [id, b] of boxes) {
+        if (b.input === document.activeElement) return { categoryId: id, field: 'name' };
+        if (b.reason && b.reason === document.activeElement) return { categoryId: id, field: 'reason' };
+      }
+      return null;
+    },
+    setLocks(set) {
+      const next = new Set(set || []);
+      if (next.size === locks.size && [...next].every((x) => locks.has(x))) return;
+      locks = next;
+      if (drag) {   // 按壓把手中：不重畫把手（避免放開事件遺失）；若正拖曳的卡被組員取得則取消
+        needRender = true;
+        if (drag.active && locks.has('card:' + drag.id)) endDrag(false);
+        return;
+      }
+      render();
+    },
+    cancelGrab(cardId) {
+      if (drag?.active && drag.id === cardId) endDrag(false);
+      if (selected === cardId) { selected = null; render(); }
+    },
     destroy() { if (drag?.active) endDrag(false); document.querySelectorAll('dialog.reader').forEach((d) => d.remove()); },
   };
 }

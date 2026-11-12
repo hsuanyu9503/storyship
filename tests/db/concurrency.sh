@@ -36,3 +36,47 @@ begin
   raise notice 'ok - 多連線同時操作：沒有遺失更新，過期操作皆被拒絕';
 end $$;
 SQL
+
+# ---------- 六組同時完成並提交（6 個連線同時送出） ----------
+psql_ -d "$DB" >/dev/null <<'SQL'
+-- 每組：所有故事放進分類 1，兩個分類都命名、寫共同特色（版本取當下最新）
+do $$
+declare v_sid uuid := (select sid from t.ctx); g int; v_gid uuid; c record; k record; r jsonb; tok text;
+begin
+  for g in 1..6 loop
+    tok := md5('S' || g || '-1') || md5('x');
+    select id into v_gid from public.groups where session_id = v_sid and number = g;
+    for c in select sc.id, coalesce(gp.rev, 0) rev from public.story_cards sc
+               left join public.group_placements gp on gp.group_id = v_gid and gp.card_id = sc.id loop
+      r := public.group_move_card(v_sid, tok, c.id, (select id from public.group_categories where group_id = v_gid and label_no = 1), c.rev);
+    end loop;
+    for k in select * from public.group_categories where group_id = v_gid loop
+      perform public.group_update_category(v_sid, tok, k.id, 'name', '第' || g || '組分類' || k.label_no, k.name_rev);
+      perform public.group_update_category(v_sid, tok, k.id, 'reason', '共同特色' || k.label_no, k.reason_rev);
+    end loop;
+  end loop;
+end $$;
+SQL
+SID=$(psql_ -d "$DB" -t -A -c "select sid from t.ctx")
+for g in 1 2 3 4 5 6; do
+  REV=$(psql_ -d "$DB" -t -A -c "select board_rev from public.groups where session_id = '$SID' and number = $g")
+  ( psql_ -d "$DB" -t -A -c "set role anon; select public.group_submit('$SID', md5('S$g-2') || md5('x'), $REV)->>'ok'" > "$HERE/.sub$g" 2>&1 ) &
+  ( psql_ -d "$DB" -t -A -c "set role anon; select public.group_submit('$SID', md5('S$g-3') || md5('x'), $REV)->>'code'" > "$HERE/.sub${g}b" 2>&1 ) &
+done
+wait
+cat "$HERE"/.sub* | grep -qi "deadlock" && { echo "FAIL: 同時提交發生死結"; exit 1; }
+rm -f "$HERE"/.sub*
+psql_ -d "$DB" <<'SQL'
+do $$
+declare n int; s int;
+begin
+  select count(*) into n from public.groups g join t.ctx on g.session_id = t.ctx.sid where g.status = 'submitted';
+  select count(*) into s from public.group_snapshots gs join t.ctx on gs.session_id = t.ctx.sid where kind = 'submitted';
+  if n <> 6 or s <> 6 then raise exception 'FAIL: 六組同時提交：已提交 % 組、快照 % 份（應各為 6）', n, s; end if;
+  if exists (select 1 from public.group_snapshots gs join public.groups g on g.id = gs.group_id
+              where gs.data->'categories'->0->>'name' not like '第' || g.number || '組%') then
+    raise exception 'FAIL: 快照內容混到其他組';
+  end if;
+  raise notice 'ok - 六組（每組兩位組員）同時提交：6 組各一份快照，內容互不混雜，無死結';
+end $$;
+SQL
