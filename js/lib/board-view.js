@@ -30,7 +30,9 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
                                   readOnly = false, onChange = () => {}, embedded = false,
                                   reasons = false, variant = '', confirmEveryDelete = false,
                                   onGrab = () => {}, onRelease = () => {},
-                                  onFieldFocus = () => {}, onFieldBlur = () => {}, makeId = null }) {
+                                  onFieldFocus = () => {}, onFieldBlur = () => {}, makeId = null,
+                                  maxCategories = M.MAX_CATEGORIES }) {
+  let silentBlur = false;   // 程式取消輸入時的 blur：不送出「離開欄位就儲存」
   let locks = new Set();    // 其他組員持有的操作鎖
   let needRender = false;   // 按壓把手期間延後的重畫
   let data = M.emptyBoard();
@@ -100,7 +102,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
 
   function commitMove(cardId, target) {
     if (target === '__new') {
-      const r = M.addCategory(data, makeId);
+      const r = M.addCategory(data, makeId, maxCategories);
       if (!r.id) return render();
       data = M.moveCard(r.data, cardId, r.id);
       render();
@@ -118,7 +120,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
   function onAdd() {
     if (ro) return;
     if (selected) { const id = selected; selected = null; return commitMove(id, '__new'); }
-    const r = M.addCategory(data, makeId);
+    const r = M.addCategory(data, makeId, maxCategories);
     if (!r.id) return;
     data = r.data;
     render();
@@ -162,7 +164,8 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     el.addEventListener('input', (e) => { if (!composing && !e.isComposing) push(field === 'name' ? 'rename' : 'reason'); });
     el.addEventListener('focus', () => { if (!el.readOnly) onFieldFocus(getId(), field); });
     el.addEventListener('blur', () => {
-      if (!composing) push(field === 'name' ? 'rename-commit' : 'reason-commit');
+      if (!composing && !silentBlur) push(field === 'name' ? 'rename-commit' : 'reason-commit');
+      composing = false;
       onFieldBlur(getId(), field);
     });
     if (field === 'name') el.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) el.blur(); });
@@ -321,6 +324,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     el.classList.toggle('bd-ro', ro);
     el.classList.toggle('bd-moving', Boolean(selected) && !ro);
     addBtn.hidden = ro;
+    addBtn.disabled = data.categories.length >= maxCategories;
     addBtn.textContent = selected ? '＋新增分類並放入' : '＋新增分類';
     hint.hidden = ro || data.categories.length > 0;
 
@@ -423,6 +427,14 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
         if (drag.active && locks.has('card:' + drag.id)) endDrag(false);
         return;
       }
+      render();
+    },
+    // 程式取消目前的輸入（例如伺服器回報衝突）：失去焦點但不送出欄位內容，接著以資料重畫
+    cancelEdit() {
+      const a = document.activeElement;
+      if (!a || !el.contains(a)) return;
+      silentBlur = true;
+      try { a.blur(); } finally { silentBlur = false; }
       render();
     },
     cancelGrab(cardId) {

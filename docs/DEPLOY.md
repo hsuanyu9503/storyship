@@ -133,13 +133,19 @@ python3 -m http.server 8080
 
 ## F. 日後更新資料庫
 
+### 最簡單的升級方式（任何已部署的版本都適用）
+
+在 SQL Editor 貼上並執行 **`supabase/upgrade/upgrade.sql`** 一個檔案即可（內容＝002 → 003，包在單一交易中，最後自動執行檢查）。
+中途任何錯誤都會全部回復，不會留下半套狀態；可重複執行；不刪除、不修改任何既有資料。
+結果表格的 `ok` 都應為 `true`（14 列）。修改 002／003 之後，請執行 `bash supabase/upgrade/build.sh` 重新產生此檔。
+
 ### 從 Phase 2 升級到 Phase 3（已部署 Phase 2 的資料庫）
 
 只新增一個資料表（`group_category_tombstones`），不修改、不刪除任何既有資料。在 SQL Editor 依序執行：
 
 1. `supabase/migrations/002_rpc.sql`
 2. `supabase/migrations/003_security.sql`（002 之後一定要執行）
-3. `supabase/checks/verify.sql`：升級後檢查，13 列的 `ok` 都應為 `true`
+3. `supabase/checks/verify.sql`：升級後檢查，每一列的 `ok` 都應為 `true`
 
 然後把網站合併到 `main`，所有學生裝置重新整理一次。退回 Phase 2 的方式見 [`PHASE3.md`](PHASE3.md) 第二節。
 

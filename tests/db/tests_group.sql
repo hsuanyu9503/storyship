@@ -34,6 +34,13 @@ select public.student_save_personal(:'gs', :'u1a', jsonb_build_object('categorie
   'placements', (select pl from allcards)), 0) is not null as x \gset
 select public.student_submit_personal(:'gs', :'u1a', 1) is not null as x \gset
 select public.student_save_personal(:'gs', :'u1b', format('{"categories":[{"id":"k","no":1,"name":""}],"placements":{"%s":"k"}}', :'gcard_a')::jsonb, 0) is not null as x \gset
+-- 複檢：版本號傳 null 不能跳過版本檢查
+select t.raises(format($$select public.student_save_personal(%L, %L, '{"categories":[],"placements":{}}', null)$$, :'gs', :'u1b'), 'BAD_DATA', '複檢：個人儲存的版本號為 null 被拒絕');
+select t.raises(format($$select public.student_submit_personal(%L, %L, null)$$, :'gs', :'u1b'), 'BAD_DATA', '複檢：個人提交的版本號為 null 被拒絕');
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select t.raises(format($$select public.teacher_set_stage(%L, '02', '02', '{"screen":"task"}', null, false)$$, :'gs'), 'BAD_DATA', '複檢：環節切換的版本號為 null 被拒絕');
 reset role;
 create table t.p3_personal_before as select participant_id, data, rev from public.personal_boards where session_id = :'gs';
 
@@ -86,6 +93,9 @@ select t.ok((public.group_move_card(:'gs', :'u1b', :'gcard_a', :'gc2', 0)->>'cod
 select t.ok((public.group_update_category(:'gs', :'u1a', :'gc1', 'reason', '都有神奇的力量', 1)->>'rev')::int = 2, 'P3：填寫共同特色');
 select t.ok((public.group_update_category(:'gs', :'u1a', :'gc1', 'reason', '都有神奇的力量', 1)->>'unchanged')::boolean, 'P3：重送同一理由：成功但不重複寫入');
 select t.ok((public.group_update_category(:'gs', :'u1b', :'gc1', 'reason', '別的說法', 1)->>'code') = 'STALE', 'P3：舊版本的理由不能覆蓋');
+select t.raises(format($$select public.group_update_category(%L, %L, %L, 'reason', '用 null 覆蓋', null)$$, :'gs', :'u1b', :'gc1'), 'BAD_DATA', '複檢：修改理由的版本號為 null 被拒絕');
+select t.raises(format($$select public.group_move_card(%L, %L, %L, %L, null)$$, :'gs', :'u1b', :'gcard_a', :'gc2'), 'BAD_DATA', '複檢：移動故事的版本號為 null 被拒絕');
+select t.ok((public.student_group_board(:'gs', :'u1a')->'categories'->0->>'reason') = '都有神奇的力量', '複檢：null 版本號沒有改動任何資料');
 
 -- 刪除與移動、編輯的衝突
 select t.ok((public.group_lock(:'gs', :'u1b', 'reason:' || :'gc3')->>'ok')::boolean, 'P3：1b 開始編輯分類 3 的理由');
@@ -131,6 +141,7 @@ select (public.student_group_board(:'gs', :'u1a')->>'board_rev')::bigint as brev
 select t.ok((public.group_submit(:'gs', :'u1a', :brev)->>'code') = 'EDITING', 'P3：其他組員正在輸入時不能提交（避免遺漏）');
 select public.group_lock(:'gs', :'u1c', 'name:aaaaaaaa-0000-4000-8000-000000000009', true) is not null as x \gset
 select t.ok((public.group_submit(:'gs', :'u1a', :brev - 1)->>'code') = 'STALE', 'P3：以舊畫面提交被拒絕');
+select t.raises(format($$select public.group_submit(%L, %L, null)$$, :'gs', :'u1a'), 'BAD_DATA', '複檢：提交的版本號為 null 被拒絕');
 select t.ok((public.group_submit(:'gs', :'u1a', :brev)->>'ok')::boolean, 'P3：合法成果提交成功（空分類不影響）');
 select t.ok((public.group_submit(:'gs', :'u1b', :brev)->>'code') = 'ALREADY_SUBMITTED', 'P3：第二位組員重複提交 → ALREADY_SUBMITTED');
 reset role;
@@ -220,6 +231,31 @@ select t.ok(public.projector_state(:'gs', :'gpk')::text not like '%神奇的事%
 reset role;
 -- 清除本場次（避免影響 tests.sql 之後的檢查）
 delete from public.sessions where id = :'gs';
+
+-- ======================================================================
+-- 複檢：結束個人分類時班上沒有學生 → 之後加入、返回 03 仍為鎖定
+-- ======================================================================
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select (r->>'session_id') as es, (r->>'join_code') as ecode from (select public.teacher_create_session('空班測試', 6) r) x \gset
+select rev as r from public.session_state where session_id = :'es' \gset
+select public.teacher_set_stage(:'es', '03', '03', '{"screen":"instruction"}', :r, false) is not null as x \gset
+select rev as r from public.session_state where session_id = :'es' \gset
+select public.teacher_set_stage(:'es', '04', '04', '{"screen":"instruction"}', :r, false) is not null as x \gset
+reset role;
+set role anon;
+select public.student_join(:'ecode', md5('late') || md5('x'), 1) is not null as j \gset
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select rev as r from public.session_state where session_id = :'es' \gset
+select public.teacher_set_stage(:'es', '03', '03', '{"screen":"instruction"}', :r, false) is not null as x \gset
+reset role;
+set role anon;
+select t.ok(not (public.student_state(:'es', md5('late') || md5('x'))->'can'->>'personal_edit')::boolean, '複檢：結束 03 時沒有學生，之後加入並返回 03 仍為鎖定');
+select t.raises(format($$select public.student_save_personal(%L, %L, '{"categories":[],"placements":{}}', 0)$$, :'es', md5('late') || md5('x')), 'PERSONAL_LOCKED', '複檢：上述情況下 API 也拒絕寫入');
+reset role;
+delete from public.sessions where id = :'es';
 
 \pset tuples_only off
 select count(*) as "全部通過的檢查數（含 Phase 3）" from t.passes;

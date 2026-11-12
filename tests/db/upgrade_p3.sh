@@ -53,13 +53,30 @@ digest() { q "select md5(string_agg(t, '|' order by t)) from (
   select 'st' || session_id || phase || rev from public.session_state) x"; }
 BEFORE=$(digest)
 
+# ---------- 複檢：升級空窗（只執行了 002、003 尚未執行）----------
+# 模擬 Supabase 的預設權限：public 新建的資料表自動授權給 anon／authenticated
+q "alter default privileges in schema public grant all on tables to anon, authenticated" >/dev/null
+psql_ -d "$DB" -f "$ROOT/supabase/migrations/002_rpc.sql" >/dev/null 2>&1
+for stmt in "select count(*) from public.group_category_tombstones" \
+            "insert into public.group_category_tombstones (category_id, group_id) select gen_random_uuid(), id from public.groups limit 1"; do
+  OUT=$(psql_ -d "$DB" -c "set role anon" -c "$stmt" 2>&1 || true)
+  echo "$OUT" | grep -qi "permission denied" || fail "只執行 002 時 anon 可以存取 tombstone 資料表：$stmt → $OUT"
+done
+echo "ok - 複檢：只執行 002（003 尚未執行）時，新資料表已啟用 RLS、anon 不能讀寫（模擬 Supabase 預設權限）"
+q "alter default privileges in schema public revoke all on tables from anon, authenticated" >/dev/null
+q "drop table public.group_category_tombstones" >/dev/null
+q "drop function if exists public.group_add_category(uuid, text, uuid); drop function if exists app.group_result_json(uuid); drop function if exists app.lock_open_groups(uuid)" >/dev/null
+psql_ -d "$DB" -f "$TMP/002_rpc.sql" >/dev/null 2>&1; psql_ -d "$DB" -f "$TMP/003_security.sql" >/dev/null 2>&1
+psql_ -d "$DB" -f "$ROOT/supabase/rollback/phase3_to_phase2.sql" >/dev/null 2>&1
+[ "$(digest)" = "$BEFORE" ] || fail "空窗測試後無法回到升級前狀態"
+
 # ---------- 升級（docs/PHASE3.md 第二節）----------
 for f in "$ROOT/supabase/migrations/002_rpc.sql" "$ROOT/supabase/migrations/003_security.sql"; do psql_ -d "$DB" -f "$f" >/dev/null 2>&1; done
 [ "$(digest)" = "$BEFORE" ] || fail "升級後既有資料改變"
 echo "ok - Phase 2 → 3 升級：場次、學生、個人草稿與快照、小組分類、提交快照、課堂狀態完全不變"
 BAD=$(psql_ -d "$DB" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|f$' || true)
 [ "$BAD" = "0" ] || { psql_ -d "$DB" -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查有 $BAD 項未通過"; }
-echo "ok - 升級後檢查（supabase/checks/verify.sql）13 項全數通過"
+echo "ok - 升級後檢查（supabase/checks/verify.sql）全數通過"
 
 # 上課中的場次直接繼續：第二組用新版操作、教師結束共同分類、原提交快照保留
 R=$(psql_ -d "$DB" <<SQL

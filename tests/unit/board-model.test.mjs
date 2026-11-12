@@ -126,3 +126,10 @@ test('小組：normalize 保留理由；sameBoard 會比較理由', () => {
   assert.equal(d.categories[0].reason, '原因');
   assert.ok(!M.sameBoard(d, M.setReason(d, 'x', '別的原因')));
 });
+
+test('分類數量上限可指定（小組 20，與伺服器一致）', () => {
+  let d = M.emptyBoard();
+  for (let i = 0; i < 25; i++) d = M.addCategory(d, null, 20).data;
+  assert.equal(d.categories.length, 20);
+  assert.equal(M.addCategory(d, null, 20).id, null, '超過上限不新增（不會先顯示再被伺服器拒絕）');
+});

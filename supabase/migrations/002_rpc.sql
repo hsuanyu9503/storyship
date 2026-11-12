@@ -13,6 +13,36 @@ create table if not exists public.group_category_tombstones (
   deleted_at  timestamptz not null default now()
 );
 create index if not exists group_category_tombstones_group on public.group_category_tombstones (group_id);
+-- 建立後立即啟用 RLS 並收回權限（不等 003）：Supabase 會自動把 public 新資料表授權給 anon／authenticated，
+-- 若 002 已執行而 003 尚未執行，這裡確保沒有暴露的空窗（複檢）。003 會再套用一次，結果相同。
+alter table public.group_category_tombstones enable row level security;
+revoke all on public.group_category_tombstones from anon, authenticated, public;
+
+-- 個人分類已結束的明確標記（複檢：結束 03 時班上沒有學生就不會有快照，不能只靠快照判斷）
+alter table public.session_state add column if not exists personal_closed_at timestamptz;
+
+-- =====================================================================
+-- 鎖定協定（Phase 3 複檢後整理；所有寫入路徑都遵守）
+--   1. sessions 列：教師以 FOR NO KEY UPDATE 鎖定（同一場次的教師操作依序執行）。
+--      這個模式與外鍵檢查的 FOR KEY SHARE 相容：學生插入 group_snapshots／participants 等資料時
+--      不會被教師卡住（複檢 F3：原本用 FOR UPDATE，會與學生提交互相等待而死結）。
+--   2. session_state 列：學生寫入取 FOR SHARE；教師切換環節、暫停、換組、移出、刪除場次取 FOR UPDATE。
+--      教師拿到此鎖時，所有進行中的學生寫入都已完成，新的學生寫入會等待。
+--   3. 學生在取得 session_state 鎖「之後」才讀取自己的 participant（組別、是否被移出），
+--      因此換組／移出與進行中的寫入不會交錯（複檢 F4）。
+--   4. groups 列：FOR UPDATE（同組寫入依序；教師結束時逐組鎖定）。
+--   取得順序永遠是 sessions → session_state → groups，不會形成等待環。
+-- =====================================================================
+create or replace function app.own_session(p_session uuid) returns public.sessions
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare s public.sessions;
+begin
+  perform app.require_teacher();
+  select * into s from public.sessions where id = p_session for no key update;
+  if not found then raise exception 'SESSION_NOT_FOUND'; end if;
+  if s.teacher_id <> auth.uid() then raise exception 'FORBIDDEN'; end if;
+  return s;
+end $$;
 
 -- =====================================================================
 -- 教師端
@@ -100,6 +130,8 @@ create or replace function public.teacher_set_stage(p_session uuid, p_phase text
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare s public.sessions; st public.session_state; v_open int[]; g record;
 begin
+  -- 版本號不可為 null（null 會讓「版本不符」的比較失效而略過檢查）
+  if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
   s := app.own_session(p_session);
   if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
   if not app.valid_phase(p_phase) or p_sub is null or char_length(p_sub) > 20 then raise exception 'BAD_DATA'; end if;
@@ -159,6 +191,8 @@ create or replace function public.teacher_delete_session(p_session uuid)
 returns void language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   perform app.own_session(p_session);
+  -- 先等進行中的學生寫入結束、並阻擋新的寫入，再刪除（刪除需要 sessions 的 FOR UPDATE）
+  perform 1 from public.session_state where session_id = p_session for update;
   delete from public.sessions where id = p_session;
 end $$;
 
@@ -199,6 +233,8 @@ begin
   select * into p from public.participants where id = p_participant;
   if not found then raise exception 'NOT_JOINED'; end if;
   perform app.own_session(p.session_id);
+  -- 等進行中的學生寫入結束、並阻擋新的寫入，換組後才放行（複檢 F4）
+  perform 1 from public.session_state where session_id = p.session_id for update;
   select * into g from public.groups where session_id = p.session_id and number = p_group_number for update;
   if not found then raise exception 'NO_GROUP'; end if;
   if g.id = p.group_id and p.status = 'active' then return; end if;
@@ -215,6 +251,7 @@ begin
   select * into p from public.participants where id = p_participant;
   if not found then raise exception 'NOT_JOINED'; end if;
   perform app.own_session(p.session_id);
+  perform 1 from public.session_state where session_id = p.session_id for update;   -- 同上（複檢 F4）
   delete from public.group_locks where participant_id = p.id;
   update public.participants set status = 'removed' where id = p.id;
 end $$;
@@ -362,7 +399,8 @@ end $$;
 -- ---------------------------------------------------------------------
 create or replace function app.personal_closed(p_session uuid) returns boolean
 language sql stable security definer set search_path = public, pg_temp as $$
-  select exists (select 1 from public.personal_snapshots where session_id = p_session);
+  select exists (select 1 from public.session_state where session_id = p_session and personal_closed_at is not null)
+      or exists (select 1 from public.personal_snapshots where session_id = p_session);   -- 升級前建立的快照
 $$;
 
 -- 暫時名稱：空白，或學生沒有改動的「分類 N」（含全形數字）都不算正式命名
@@ -407,6 +445,7 @@ begin
     left join public.personal_boards b on b.participant_id = p.id
    where p.session_id = p_session and p.status = 'active'
   on conflict (participant_id) do nothing;
+  update public.session_state set personal_closed_at = coalesce(personal_closed_at, now()) where session_id = p_session;
   perform app.notify('lesson:' || p_session, 'personal');
 end $$;
 
@@ -432,10 +471,12 @@ create or replace function app.personal_edit_ctx(p_session uuid, p_token text)
 returns public.personal_boards language plpgsql security definer set search_path = public, pg_temp as $$
 declare p public.participants; s public.sessions; st public.session_state; b public.personal_boards;
 begin
+  -- FOR SHARE：與教師切換環節（FOR UPDATE）互斥，保證快照與最後一次儲存的先後一致；
+  -- 之後才讀學生身分（與移出互斥）
+  select * into st from public.session_state where session_id = p_session for share;
+  if not found then raise exception 'SESSION_NOT_FOUND'; end if;
   p := app.active_participant(p_session, p_token);
   select * into s from public.sessions where id = p_session;
-  -- FOR SHARE：與教師切換環節（FOR UPDATE）互斥，保證快照與最後一次儲存的先後一致
-  select * into st from public.session_state where session_id = p_session for share;
   if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
   if st.phase <> '03' then raise exception 'NOT_AVAILABLE'; end if;
   if app.personal_closed(p_session) then raise exception 'PERSONAL_LOCKED'; end if;
@@ -452,6 +493,8 @@ create or replace function public.student_save_personal(p_session uuid, p_token 
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare b public.personal_boards; v_set uuid; v_data jsonb;
 begin
+  -- 版本號不可為 null（null 會讓「版本不符」的比較失效而略過檢查）
+  if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
   b := app.personal_edit_ctx(p_session, p_token);
   if b.submitted_at is not null then raise exception 'SUBMITTED'; end if;
   if b.rev <> p_expected_rev then
@@ -468,6 +511,8 @@ create or replace function public.student_submit_personal(p_session uuid, p_toke
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare b public.personal_boards; v_set uuid; v_prob jsonb;
 begin
+  -- 版本號不可為 null（null 會讓「版本不符」的比較失效而略過檢查）
+  if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
   b := app.personal_edit_ctx(p_session, p_token);
   if b.submitted_at is not null then return jsonb_build_object('ok', true, 'rev', b.rev); end if;
   if b.rev <> p_expected_rev then
@@ -514,8 +559,10 @@ create or replace function app.group_edit_ctx(p_session uuid, p_token text,
 language plpgsql security definer set search_path = public, pg_temp as $$
 declare p public.participants; g public.groups; s public.sessions; st public.session_state;
 begin
-  p := app.active_participant(p_session, p_token);
+  -- 先鎖課堂狀態，再讀學生的組別：換組／移出（持有 FOR UPDATE）完成前不會讀到舊組別（複檢 F4）
   select * into st from public.session_state where session_id = p_session for share;
+  if not found then raise exception 'SESSION_NOT_FOUND'; end if;
+  p := app.active_participant(p_session, p_token);
   select * into s from public.sessions where id = p_session;
   select * into g from public.groups where id = p.group_id for update;
   if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
@@ -601,6 +648,8 @@ begin
   select * into g from public.groups where id = p.group_id;
   return app.group_board_json(g.id) || jsonb_build_object(
     'group_id', g.id, 'group_number', g.number, 'group_name', g.name, 'status', g.status, 'board_rev', g.board_rev,
+    -- 伺服器讀取時間：board_rev 相同（例如只有操作鎖改變）時，前端用來分辨回應先後（不用客戶端時間）
+    'read_at', extract(epoch from clock_timestamp()),
     'paused', st.editing_paused, 'phase', st.phase,
     'can_edit', s.status = 'active' and st.phase = '04' and not st.editing_paused and g.status = 'open',
     'problems', app.group_problems(g.id),
@@ -643,6 +692,8 @@ create or replace function public.group_move_card(p_session uuid, p_token text, 
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare c record; v_rev bigint; v_cur uuid; v_holder uuid;
 begin
+  -- 版本號不可為 null（null 會讓「版本不符」的比較失效而略過檢查）
+  if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
   select * into c from app.group_edit_ctx(p_session, p_token);
   if not exists (select 1 from public.story_cards where id = p_card and content_set_id = c.content_set_id) then
     raise exception 'BAD_DATA';
@@ -679,6 +730,8 @@ create or replace function public.group_update_category(p_session uuid, p_token 
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare c record; v_cat public.group_categories; v_holder uuid; v_cur_rev bigint; v_val text;
 begin
+  -- 版本號不可為 null（null 會讓「版本不符」的比較失效而略過檢查）
+  if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
   select * into c from app.group_edit_ctx(p_session, p_token);
   if p_field not in ('name', 'reason') then raise exception 'BAD_DATA'; end if;
   v_val := coalesce(p_value, '');
@@ -773,6 +826,8 @@ create or replace function public.group_submit(p_session uuid, p_token text, p_e
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare c record; g public.groups; v_prob jsonb; v_editing jsonb;
 begin
+  -- 版本號不可為 null（null 會讓「版本不符」的比較失效而略過檢查）
+  if p_expected_board_rev is null then raise exception 'BAD_DATA'; end if;
   begin
     select * into c from app.group_edit_ctx(p_session, p_token);
   exception when raise_exception then

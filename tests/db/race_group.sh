@@ -123,3 +123,72 @@ timed "psql_ -d '$DB' -c \"set role anon; select public.group_move_card('$S', '$
 wait
 echo "$OUT" | grep -q "PAUSED" || fail "情境 6 暫停後的操作沒有被拒絕：$OUT"
 echo "ok - 情境 6：教師暫停進行中 → 學生操作等待 ${WAITED} ms 後被拒絕（PAUSED）"
+
+# ---------- 7（複檢 F3）：學生提交插入快照（外鍵對 sessions 取 KEY SHARE）vs 教師操作（sessions 鎖） ----------
+# 學生交易先取得 session_state SHARE＋groups UPDATE（同一交易內的第一個操作），停頓後提交（插入 group_snapshots）；
+# 教師在中間暫停全班。修正前兩者互等 → 死結（40P01）。
+S=$(setup)
+psql_ -d "$DB" >/dev/null <<SQL
+set role anon;
+select public.group_add_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000007');
+select public.group_update_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000007', 'name', '全部', 1);
+select public.group_update_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000007', 'reason', '都是故事', 1);
+reset role;
+create temp table m as select unnest(string_to_array($ALL, ','))::uuid id; grant select on m to anon;
+set role anon;
+select count(*) from (select public.group_move_card('$S', '$TA', id, 'cccccccc-0000-4000-8000-000000000007', 0) from m) x;
+SQL
+BREV=$(q "select board_rev from public.groups where session_id = '$S' and number = 1")
+( { echo "begin;"; anon "select public.group_lock('$S', '$TA', 'card:$CARD');"; echo "select pg_sleep(1.5);"
+    echo "select public.group_lock('$S', '$TA', 'card:$CARD', true);"
+    echo "select public.group_submit('$S', '$TA', $BREV)->>'ok';"; echo "commit;"; } | psql_ -d "$DB" > "$HERE/.r7a" 2>&1 ) &
+sleep 0.5
+( psql_ -d "$DB" -c "$TEACH" -c "select public.teacher_set_flags('$S', p_editing_paused => true)" > "$HERE/.r7b" 2>&1 ) &
+wait
+R="$(cat "$HERE/.r7a" "$HERE/.r7b")"; rm -f "$HERE/.r7a" "$HERE/.r7b"
+echo "$R" | grep -qi "deadlock" && fail "情境 7（F3）學生提交與教師暫停發生死結：$(echo "$R" | grep -i deadlock | head -1)"
+[ "$(q "select count(*) from public.group_snapshots gs join public.groups g on g.id = gs.group_id where g.session_id = '$S'")" = "1" ] || fail "情境 7 提交沒有完成：$R"
+[ "$(q "select editing_paused from public.session_state where session_id = '$S'")" = "t" ] || fail "情境 7 教師暫停沒有完成"
+echo "ok - 情境 7（複檢 F3）：學生提交（插入快照）與教師暫停交錯 → 無死結，兩者都完成"
+
+# ---------- 8（複檢 F4）：換組 vs. 進行中的編輯 ----------
+# C 暫時鎖住第一組；A（第一組）送出修改並等待；教師把 A 換到第二組。
+# 修正後：教師必須等 A 的請求結束才完成（寫入先完成的語義），或 A 的請求在換組後被拒絕；
+# 不允許「教師已回報換組成功，A 之後仍寫入第一組」。
+S=$(setup)
+q "set role anon; select public.group_add_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000008')" >/dev/null
+G1=$(q "select id from public.groups where session_id = '$S' and number = 1")
+PA=$(q "select id from public.participants where session_id = '$S' and token_hash = encode(sha256(convert_to('$TA','UTF8')),'hex')")
+( { echo "begin; select 1 from public.groups where id = '$G1' for update; select pg_sleep(1.5); commit;"; } | psql_ -d "$DB" >/dev/null 2>&1 ) &
+sleep 0.3
+( psql_ -d "$DB" -c "set role anon" -c "select public.group_update_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000008', 'name', '換組前送出', 1)->>'ok', clock_timestamp()" > "$HERE/.r8a" 2>&1 ) &
+sleep 0.3
+( psql_ -d "$DB" -c "$TEACH" -c "select public.teacher_move_participant('$PA', 2)" -c "select clock_timestamp()" > "$HERE/.r8b" 2>&1 ) &
+wait
+A_OUT=$(cat "$HERE/.r8a"); B_OUT=$(cat "$HERE/.r8b"); rm -f "$HERE/.r8a" "$HERE/.r8b"
+A_T=$(echo "$A_OUT" | grep -o '20[0-9-]* [0-9:.]*' | tail -1); B_T=$(echo "$B_OUT" | grep -o '20[0-9-]* [0-9:.]*' | tail -1)
+NAME=$(q "select name from public.group_categories where id = 'cccccccc-0000-4000-8000-000000000008'")
+if [ "$NAME" = "換組前送出" ]; then
+  # 寫入成功：教師的換組必須在寫入之後才完成
+  [ "$(q "select '$B_T'::timestamptz > '$A_T'::timestamptz")" = "t" ] || fail "情境 8（F4）教師換組先完成，A 之後仍寫入原組（A=$A_T 教師=$B_T）"
+fi
+[ "$(q "select g.number from public.participants p join public.groups g on g.id = p.group_id where p.id = '$PA'")" = "2" ] || fail "情境 8 換組沒有完成"
+echo "ok - 情境 8（複檢 F4）：換組與進行中的編輯不會交錯（寫入完成後才換組，或寫入被拒絕）"
+
+# ---------- 9（複檢 F4）：移出 vs. 進行中的編輯 ----------
+S=$(setup)
+q "set role anon; select public.group_add_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000009')" >/dev/null
+G1=$(q "select id from public.groups where session_id = '$S' and number = 1")
+PA=$(q "select id from public.participants where session_id = '$S' and token_hash = encode(sha256(convert_to('$TA','UTF8')),'hex')")
+( { echo "begin; select 1 from public.groups where id = '$G1' for update; select pg_sleep(1.5); commit;"; } | psql_ -d "$DB" >/dev/null 2>&1 ) &
+sleep 0.3
+( psql_ -d "$DB" -c "set role anon" -c "select public.group_update_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000009', 'name', '移出前送出', 1)->>'ok', clock_timestamp()" > "$HERE/.r9a" 2>&1 ) &
+sleep 0.3
+( psql_ -d "$DB" -c "$TEACH" -c "select public.teacher_remove_participant('$PA')" -c "select clock_timestamp()" > "$HERE/.r9b" 2>&1 ) &
+wait
+A_OUT=$(cat "$HERE/.r9a"); B_OUT=$(cat "$HERE/.r9b"); rm -f "$HERE/.r9a" "$HERE/.r9b"
+A_T=$(echo "$A_OUT" | grep -o '20[0-9-]* [0-9:.]*' | tail -1); B_T=$(echo "$B_OUT" | grep -o '20[0-9-]* [0-9:.]*' | tail -1)
+if [ "$(q "select name from public.group_categories where id = 'cccccccc-0000-4000-8000-000000000009'")" = "移出前送出" ]; then
+  [ "$(q "select '$B_T'::timestamptz > '$A_T'::timestamptz")" = "t" ] || fail "情境 9（F4）教師移出先完成，A 之後仍寫入（A=$A_T 教師=$B_T）"
+fi
+echo "ok - 情境 9（複檢 F4）：移出與進行中的編輯不會交錯"
