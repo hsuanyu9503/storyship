@@ -135,7 +135,7 @@ async function viewConsole(sessionId) {
 
   const els = {
     head: h('div'), steps: h('nav.steps'), panel: h('section.card.panel'),
-    live: h('div.preview-box'), draft: h('div.preview-box'), draftWrap: h('div'), roster: h('section.card'),
+    live: h('div.preview-box'), draft: h('div.preview-box'), draftWrap: h('div.draft-wrap'), roster: h('section.card'),
   };
   S.els = els;
   mount(root, h('div.page.console',
@@ -253,15 +253,16 @@ async function publish(phase, sub, projection, { lock = false } = {}) {
 
 async function goPhase(phase) {
   if (!phase) return;
-  // 06：已揭露的類型以伺服器的揭露紀錄為準，與這台裝置記得的畫面合併
-  //（換裝置、重新整理、在 07 公開過其他類型後返回，都不會把已揭露的類型又藏起來）
+  // 共同的離開檢查放在各環節專屬邏輯之前（任何目的環節都一樣）。
+  // 結束個人分類：從 03 以前前往 04 以後，先讓教師確認未完成人數（不會強制阻止；取消則完全不送出）
+  if (S.state.phase <= '03' && phase >= '04' && S.personal.snapshots === 0 && !(await confirmEndPersonal())) return;
+  // 06：投影由伺服器依揭露紀錄產生（類型名稱與各要素分開記錄）；這裡只送畫面種類與位置，
+  // 不帶「揭開」指令，因此返回 06 不會擴大公開範圍
   if (phase === '06') {
     const prev = recallProjection('06')?.projection?.ctl || P.genreInitial();
-    const g = { ...prev, revealed: [...new Set([...(prev.revealed || []), ...(S.state?.disclosure?.genres || [])])].sort((a, b) => a - b) };
+    const g = { view: prev.view || 'recap', index: Number.isInteger(prev.index) ? prev.index : 0, revealed: [] };
     return publish('06', P.genreSub(g), P.genreProjection(S.content.genres, g));
   }
-  // 結束個人分類：從 03 以前前往 04 以後，先讓教師確認未完成人數（不會強制阻止）
-  if (S.state.phase <= '03' && phase >= '04' && S.personal.snapshots === 0 && !(await confirmEndPersonal())) return;
   const remembered = recallProjection(phase);
   const def = P.defaultProjection(phase, S.content);
   const { sub, projection } = remembered || def;
@@ -393,10 +394,10 @@ function renderPanel() {
 }
 
 const ctl01 = () => (S.pub?.projection?.screen === 'intro' && S.pub.projection.ctl) || P.introInitial();
+// 06 的 ctl 來自伺服器產生的投影：revealed 只列出「名稱＋全部要素」都已公開的類型
 const ctl06 = () => {
   const c = (S.pub?.projection?.screen === 'genre' && S.pub.projection.ctl) || P.genreInitial();
-  // 與伺服器的揭露紀錄合併（只增加），避免換裝置時把已揭露的類型又藏起來
-  return { ...c, revealed: [...new Set([...(c.revealed || []), ...(S.state?.disclosure?.genres || [])])].sort((a, b) => a - b) };
+  return { view: c.view, index: c.index ?? 0, revealed: [...(c.revealed || [])] };
 };
 
 function intro(op) {
@@ -494,7 +495,7 @@ const PANELS = {
         gs[pv].teacher_notes ? h('p.muted', '教師補充：' + gs[pv].teacher_notes) : null,
         h('div.row',
           h('button', { onclick: () => genre('goto', pv) }, '投影「即將揭開」畫面'),
-          h('button.primary', { onclick: () => { const n = P.genreOps.reveal(gs, P.genreOps.goto(gs, c, pv)); publish('06', P.genreSub(n), P.genreProjection(gs, n)); } }, '揭開小說世界'))) : null);
+          h('button.primary', { onclick: () => { const n = P.genreOps.reveal(gs, P.genreOps.goto(gs, c, pv)); publish('06', P.genreSub(n), P.genreRevealProjection(gs, n)); } }, '揭開小說世界'))) : null);
   },
 
   '07': () => h('div', S.results.panel07(),

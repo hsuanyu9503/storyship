@@ -1,5 +1,8 @@
 // 三端端對端測試：教師主控、投影、兩台學生平板（不同瀏覽器 context＝不同裝置）
 const { chromium } = require('playwright');
+const { Pool } = require('pg');
+// 直接讀資料庫，只用來檢查（不寫入）
+const pg = new Pool({ connectionString: process.env.DATABASE_URL || 'postgres://postgres:pg@127.0.0.1/sf_e2e' });
 const fs = require('fs');
 const path = require('path');
 const BASE = process.env.BASE || 'http://localhost:8787';
@@ -9,7 +12,12 @@ fs.mkdirSync(OUT, { recursive: true });
 let passed = 0;
 const externalRequests = [];
 let lastOk = '';
-function ok(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); passed++; lastOk = msg; console.log('ok -', msg); }
+// SOFT_FAIL=1：失敗只記錄、不中止（用來在修正前的版本上一次看出所有會失敗的新測試）
+const softFails = [];
+function ok(cond, msg) {
+  if (!cond) { if (process.env.SOFT_FAIL) { softFails.push(msg); console.log('NOT OK -', msg); return; } throw new Error('FAIL: ' + msg); }
+  passed++; lastOk = msg; console.log('ok -', msg);
+}
 
 async function ctx(browser, opts = {}) {
   const c = await browser.newContext({ viewport: { width: 1280, height: 800 }, ...opts });
@@ -391,6 +399,52 @@ async function inViewport(page, sel) {
     await s2.screenshot({ path: path.join(OUT, 's03-portrait.png') });
     await s2.setViewportSize({ width: 1180, height: 820 });
 
+    // ---------- F2：離開 03 的共同確認（任何目的環節；取消時不送出任何 RPC、不改變任何狀態） ----------
+    const sid = (await teacher.evaluate(() => location.hash)).match(/[0-9a-f-]{36}/)[0];
+    const dbState = async () => (await pg.query(
+      `select st.phase, st.rev::int, st.personal_closed_at is not null closed,
+              (select count(*) from public.personal_snapshots ps where ps.session_id = $1)::int snaps,
+              (select coalesce(string_agg(ps.participant_id || ':' || ps.taken_at || ':' || md5(ps.data::text), ',' order by ps.participant_id), '')
+                 from public.personal_snapshots ps where ps.session_id = $1) snapsig
+         from public.session_state st where st.session_id = $1`, [sid])).rows[0];
+    const stageCalls = [];
+    teacher.on('request', (r) => { if (r.url().includes('/rpc/teacher_set_stage')) stageCalls.push(r.postData()); });
+    const before03 = await dbState();
+    ok(before03.phase === '03' && !before03.closed && before03.snaps === 0, 'F2：前置狀態（03、個人分類未結束、沒有快照）');
+    for (const target of ['04', '05', '06', '07']) {
+      const n = stageCalls.length;
+      if (target === '04') await teacher.click('button:has-text("結束個人分類，進入第四環節 →")');
+      else {
+        await teacher.click(`button.step:has(.step-id:text-is("${target}"))`);
+        await teacher.click('dialog button:has-text("確定")');
+      }
+      const asked = await teacher.waitForFunction(() => document.querySelector('dialog')?.innerText.includes('結束個人分類？'), null, { timeout: 5000 }).then(() => true, () => false);
+      ok(asked, `F2：03 → ${target} 先顯示「結束個人分類」確認`);
+      if (asked) await teacher.click('dialog button:has-text("返回等待")');
+      await teacher.waitForTimeout(1500);
+      const after = await dbState();
+      ok(stageCalls.length === n, `F2：03 → ${target} 取消後沒有送出 teacher_set_stage`);
+      ok(after.phase === '03' && !after.closed && after.snaps === 0 && after.rev === before03.rev,
+        `F2：03 → ${target} 取消後 phase、personal_closed_at、快照數、版本都維持原值 ${JSON.stringify(after)}`);
+      ok((await grip(s1, '故事 A').count()) + (await s1.locator('.sc-grip').count()) > 0 && (await text(s1)).includes('已分類'), `F2：03 → ${target} 取消後學生仍可編輯個人分類`);
+      while (await teacher.locator('dialog').count()) { await teacher.click('dialog button >> nth=0'); await teacher.waitForTimeout(200); }
+    }
+    // 03 → 06 確認：先確認結束個人分類，才送出 RPC（此時小組尚未開始，伺服器回「尚有未提交小組」；選「繼續等待」則整筆不生效）
+    {
+      const n = stageCalls.length;
+      await teacher.click('button.step:has(.step-id:text-is("06"))');
+      await teacher.click('dialog button:has-text("確定")');
+      const asked = await teacher.waitForFunction(() => document.querySelector('dialog')?.innerText.includes('還有 2 位學生尚未完成個人分類'), null, { timeout: 5000 }).then(() => true, () => false);
+      ok(asked && stageCalls.length === n, 'F2：03 → 06 在教師確認前不送出 RPC');
+      if (asked) await teacher.click('dialog button:has-text("確認結束，進入第四環節")');
+      await waitText(teacher, '仍有小組尚未提交');
+      ok(stageCalls.length === n + 1, 'F2：03 → 06 教師確認後才送出 RPC');
+      await teacher.click('dialog button:has-text("繼續等待")');
+      await teacher.waitForTimeout(1200);
+      const after = await dbState();
+      ok(after.phase === '03' && !after.closed && after.snaps === 0, 'F2：03 → 06 伺服器拒絕（未提交小組）時整筆不生效，沒有快照');
+    }
+
     // 結束個人分類：顯示未完成人數 → 返回等待 → 確認結束
     await teacher.click('button:has-text("結束個人分類，進入第四環節 →")');
     await waitText(teacher, '還有 2 位學生尚未完成個人分類');
@@ -408,7 +462,15 @@ async function inViewport(page, sel) {
     await waitText(s1, '老師已結束個人分類，你的成果已保存。');
     ok((await s1.locator('.sc-grip').count()) === 0 && (await countText(s1)) === '已分類 2 / 8', '返回 03：學生無法修改，看到的是已鎖定的成果');
     ok((await text(teacher)).includes('個人分類已結束'), '返回 03：教師端顯示個人分類已鎖定');
+    const closed03 = await dbState();
     await teacher.click('button:has-text("進入第四環節：小組共作 →")');
+    await waitText(s0, '第 1 組｜共同分類');
+    await teacher.waitForTimeout(1000);
+    {
+      const again = await dbState();
+      ok(closed03.closed && closed03.snaps > 0 && again.snapsig === closed03.snapsig && again.phase === '04' && (await teacher.locator('dialog').count()) === 0,
+        `F2：已結束個人分類後返回 03 再前進，不再詢問、不重複也不覆寫快照（${again.snaps} 份）`);
+    }
 
     // ---------- 04｜小組共作（Phase 3） ----------
     const G = '.gw-main';
@@ -1071,6 +1133,133 @@ async function inViewport(page, sel) {
     await proj.reload();
     await waitText(proj, '「故事 C」');
     ok((await text(teacher)).includes('投影與預覽一致') && (await text(proj)).includes('主角都有神奇的力量'), '05：教師與投影重新整理後還原已公開的狀態');
+    // ---------- F3：預覽綁定目前的選擇（05） ----------
+    const later = () => { let res; const p = new Promise((r) => { res = r; }); return { p, res }; };
+    // 攔截某個 RPC：每個請求排隊，由測試決定何時放行（go）或中斷（abort）
+    async function holdAll(page, fn) {
+      const q = [];
+      await page.route(`**/rpc/${fn}`, (route) => {
+        const d = later(); q.push(d);
+        d.p.then((m) => (m === 'abort' ? route.abort('failed') : route.continue()).catch(() => {}));
+      });
+      return { q, done: () => page.unroute(`**/rpc/${fn}`) };
+    }
+    const draftTrack = () => teacher.evaluate(() => document.querySelector('.draft-wrap .st-cmp-track b')?.textContent || '');
+    const staleShown = () => teacher.evaluate(() => Boolean(document.querySelector('.draft-wrap .preview-stale-label')));
+    const pubBtn = () => teacher.evaluate(() => {
+      const b = [...document.querySelectorAll('.rs-bar button.primary')].pop();
+      return b ? { disabled: b.disabled, text: b.textContent } : null;
+    });
+    const statusTxt = () => teacher.evaluate(() => [...document.querySelectorAll('.rs-bar .rs-dirty, .rs-bar .rs-clean')].map((e) => e.textContent).join('|'));
+    const pubStory = async () => (await pg.query(`select projection #>> '{story,title}' t from public.session_state where session_id = $1`, [sid])).rows[0].t;
+    const until = async (fn, ms = 10000) => { const t = Date.now() + ms; while (Date.now() < t) { if (await fn()) return true; await teacher.waitForTimeout(150); } return false; };
+    if (!process.env.SKIP_F3) {
+      // (1) 延遲預覽 B：舊的 A 不可被當成目前預覽
+      let h1 = await holdAll(teacher, 'teacher_preview_compare');
+      await teacher.selectOption('select.rs-story', { label: '故事 D' });
+      await until(async () => h1.q.length >= 1, 5000);
+      await teacher.waitForTimeout(400);
+      let b = await pubBtn();
+      ok(h1.q.length >= 1 && (await staleShown()) && b?.disabled && !(await statusTxt()).includes('投影與預覽一致'),
+        `F3：預覽 B 尚未回來時，舊預覽標示過期、不能公開、不顯示「一致」 ${JSON.stringify(b)} ${await statusTxt()}`);
+      h1.q.forEach((d) => d.res('go'));
+      ok(await until(async () => (await draftTrack()) === '故事 D' && !(await staleShown()) && !(await pubBtn()).disabled),
+        'F3：預覽 B 完成後才標示為目前預覽、可以公開');
+      // (2) A、B 回應反序
+      h1.q.length = 0;
+      await teacher.selectOption('select.rs-story', { label: '故事 E' });     // A
+      await until(async () => h1.q.length >= 1, 5000);
+      await teacher.selectOption('select.rs-story', { label: '故事 F' });     // B
+      await until(async () => h1.q.length >= 2, 5000);
+      h1.q[1].res('go');                                                      // B 先回來
+      await until(async () => (await draftTrack()) === '故事 F' && !(await staleShown()));
+      h1.q[0].res('go');                                                      // A 晚到
+      await teacher.waitForTimeout(1500);
+      ok((await draftTrack()) === '故事 F' && !(await staleShown()) && !(await pubBtn()).disabled, 'F3：預覽回應反序時，較晚到的舊預覽不覆蓋目前預覽');
+      // (3) 舊請求失敗後才到
+      h1.q.length = 0;
+      await teacher.selectOption('select.rs-story', { label: '故事 B' });     // A（之後失敗）
+      await until(async () => h1.q.length >= 1, 5000);
+      await teacher.selectOption('select.rs-story', { label: '故事 E' });     // B
+      await until(async () => h1.q.length >= 2, 5000);
+      h1.q[1].res('go');
+      await until(async () => (await draftTrack()) === '故事 E' && !(await staleShown()));
+      h1.q[0].res('abort');
+      await teacher.waitForTimeout(1500);
+      ok((await draftTrack()) === '故事 E' && !(await text(teacher)).includes('預覽失敗') && !(await pubBtn()).disabled,
+        'F3：舊預覽請求失敗後才到，不影響目前的預覽與公開按鈕');
+      // (4) 預覽失敗後重試（SKIP_F3_RETRY=1 可略過：舊版在這裡會卡住，略過後才能檢查 (5)(6)）
+      if (!process.env.SKIP_F3_RETRY) {
+      h1.q.length = 0;
+      await teacher.selectOption('select.rs-story', { label: '故事 G' });
+      await until(async () => h1.q.length >= 1, 5000);
+      h1.q[0].res('abort');
+      const failed = await until(async () => (await text(teacher)).includes('預覽失敗'), 6000);
+      ok(failed && (await pubBtn()).disabled && (await teacher.locator('button:has-text("重試預覽")').count()) > 0, 'F3：預覽失敗時顯示錯誤與重試，不能公開');
+      await h1.done();
+      if (failed) await teacher.locator('button:has-text("重試預覽")').first().click();
+      ok(await until(async () => (await draftTrack()) === '故事 G' && !(await pubBtn()).disabled && !(await text(teacher)).includes('預覽失敗')), 'F3：重試預覽成功後可以公開');
+      } else {
+        await h1.done();
+        await teacher.selectOption('select.rs-story', { label: '故事 G' });
+        await until(async () => (await draftTrack()) === '故事 G');
+      }
+      // (5) 公開 B 在途時改成 C：C 不得自動公開
+      const h2 = await holdAll(teacher, 'teacher_publish_compare');
+      await teacher.click('button:has-text("公開到投影")');                  // 公開 G
+      await until(async () => h2.q.length >= 1, 5000);
+      await teacher.selectOption('select.rs-story', { label: '故事 H' });     // 在途時改成 H
+      await teacher.waitForTimeout(800);
+      h2.q.forEach((d) => d.res('go'));
+      await until(async () => (await pubStory()) === '故事 G', 12000);
+      await h2.done();
+      await teacher.waitForTimeout(5000);   // 超過輪詢週期，確認沒有自動再公開
+      ok((await pubStory()) === '故事 G' && h2.q.length === 1,
+        'F3：公開在途時的修改（H）不會自動公開，投影維持本次送出的 G');
+      ok((await statusTxt()).includes('有尚未公開的變更') && (await draftTrack()) === '故事 H', 'F3：在途時的修改留在預覽，標示尚未公開');
+      // (6) 請求真正在途時的快速操作：預覽回應延遲 700ms，連續改三次並立刻嘗試公開
+      await teacher.route('**/rpc/teacher_preview_compare', async (route) => { await new Promise((r) => setTimeout(r, 700)); return route.continue().catch(() => {}); });
+      const nPub = (await pg.query(`select rev::int from public.session_state where session_id = $1`, [sid])).rows[0].rev;
+      for (const lab of ['故事 A', '故事 D', '故事 C']) {
+        await teacher.selectOption('select.rs-story', { label: lab });
+        await teacher.evaluate(() => [...document.querySelectorAll('.rs-bar button.primary')].pop()?.click());   // 預覽未完成：按了也不會公開
+      }
+      await teacher.waitForTimeout(300);
+      const revMid = (await pg.query(`select rev::int from public.session_state where session_id = $1`, [sid])).rows[0].rev;
+      ok(revMid === nPub && (await pubStory()) === '故事 G', 'F3：預覽在途時快速改選並按公開，不會公開任何尚未預覽完成的選擇');
+      await until(async () => (await draftTrack()) === '故事 C' && !(await pubBtn()).disabled);
+      await teacher.click('button:has-text("公開到投影")');
+      await until(async () => (await pubStory()) === '故事 C', 12000);
+      await proj.waitForFunction(() => document.body.innerText.includes('「故事 C」'), null, { timeout: 12000 }).catch(() => {});
+      await teacher.unroute('**/rpc/teacher_preview_compare');
+      await teacher.waitForTimeout(3000);
+      {
+        const pub = (await pg.query(`select projection from public.session_state where session_id = $1`, [sid])).rows[0].projection;
+        ok((await statusTxt()).includes('投影與預覽一致') && pub.story?.title === '故事 C' && (await draftTrack()) === '故事 C',
+          'F3：「投影與預覽一致」時，選擇、預覽內容與實際投影內容相同');
+      }
+    }
+    // ---------- 候選 B：每頁分類數、放大單側（教師控制，不縮小字級） ----------
+    if (!process.env.SKIP_B) {
+      await teacher.locator('.rs-side').first().locator('select.rs-per').selectOption('1');
+      await teacher.locator('.rs-side').first().locator('button:has-text("放大此側")').click();
+      await until(async () => !(await pubBtn()).disabled);
+      ok(await teacher.locator('.draft-wrap .rs-fit-warn').isHidden(), '候選 B：內容放得下時沒有「放不下」提醒');
+      await teacher.click('button:has-text("公開到投影")');
+      await until(async () => (await pg.query(`select jsonb_array_length(projection -> 'sides') n from public.session_state where session_id = $1`, [sid])).rows[0].n === 1, 12000);
+      await proj.waitForTimeout(2500);
+      const pz = JSON.parse(lastProj() || '{}').projection || {};
+      ok(pz.zoom === true && pz.sides?.length === 1 && pz.sides[0].per === 1 && pz.sides[0].categories.length === 1 && !lastProj().includes('第 2 組'),
+        '候選 B：放大單側＋每頁 1 類：投影只有該側（另一側不在 API 回應中）、每頁一類');
+      await teacher.screenshot({ path: path.join(OUT, 't05-zoom.png') });
+      await proj.screenshot({ path: path.join(OUT, 'p05-zoom.png') });
+      await teacher.locator('.rs-side').first().locator('button:has-text("取消放大")').click();
+      await teacher.locator('.rs-side').first().locator('select.rs-per').selectOption('4');
+      await until(async () => !(await pubBtn()).disabled);
+      await teacher.click('button:has-text("公開到投影")');
+      ok(await until(async () => (await pg.query(`select jsonb_array_length(projection -> 'sides') n from public.session_state where session_id = $1`, [sid])).rows[0].n === 2, 12000)
+         && (await until(async () => (await statusTxt()).includes('投影與預覽一致'))), '候選 B：取消放大後回到雙組');
+    }
     // 第二台教師裝置：競爭公開與延遲回應
     const tc2 = await ctx(browser, { viewport: { width: 1366, height: 1000 } });
     const t2 = await tc2.newPage();
@@ -1171,6 +1360,32 @@ async function inViewport(page, sel) {
     await proj.waitForTimeout(2500);
     ok(!lastProj().includes('尋找線索') && !lastProj().includes('推理解謎') && !lastProj().includes('教師補充'), '07：未揭露的要素與教師補充不在投影 API 回應中');
     await proj.screenshot({ path: path.join(OUT, 'p07-match.png') });
+    // ---------- F3：預覽綁定目前的選擇（07） ----------
+    if (!process.env.SKIP_F3) {
+      const pubScaffold = async () => (await pg.query(`select projection ->> 'scaffold' t from public.session_state where session_id = $1`, [sid])).rows[0].t;
+      const h1 = await holdAll(teacher, 'teacher_preview_match');
+      await teacher.locator('label:has-text("顯示句型鷹架") input').uncheck();
+      await until(async () => h1.q.length >= 1, 5000);
+      await teacher.waitForTimeout(400);
+      ok((await staleShown()) && (await pubBtn()).disabled && !(await statusTxt()).includes('投影與預覽一致'), 'F3（07）：預覽尚未回來時標示過期、不能公開');
+      h1.q.forEach((d) => d.res('go'));
+      await h1.done();
+      ok(await until(async () => !(await staleShown()) && !(await pubBtn()).disabled), 'F3（07）：目前選擇的預覽完成後才能公開');
+      const h2 = await holdAll(teacher, 'teacher_publish_match');
+      await teacher.click('button:has-text("公開到投影")');                       // 公開「不顯示鷹架」
+      await until(async () => h2.q.length >= 1, 5000);
+      await teacher.locator('label:has-text("顯示句型鷹架") input').check();      // 在途時改回顯示
+      await teacher.waitForTimeout(600);
+      h2.q.forEach((d) => d.res('go'));
+      await until(async () => (await pubScaffold()) === 'false', 12000);
+      await h2.done();
+      await teacher.waitForTimeout(5000);
+      ok((await pubScaffold()) === 'false' && h2.q.length === 1 && (await statusTxt()).includes('有尚未公開的變更'),
+        'F3（07）：公開在途時的修改不會自動公開，留在預覽標示尚未公開');
+      await until(async () => !(await pubBtn()).disabled);
+      await teacher.click('button:has-text("公開到投影")');
+      ok(await until(async () => (await pubScaffold()) === 'true' && (await statusTxt()).includes('投影與預覽一致'), 12000), 'F3（07）：再按公開才公開，之後顯示一致');
+    }
     // 更換類型：不殘留上一種類型的標示
     await teacher.click('button.genre-btn:has-text("3. 歷史小說")');
     ok((await teacher.locator('.rs-el input:checked').count()) === 0, '07：更換類型時清除要素揭露與相似標示');
@@ -1185,14 +1400,75 @@ async function inViewport(page, sel) {
     await waitText(teacher, '投影與預覽一致');
     ok((await teacher.locator('.genre-btn.sel').textContent()).includes('歷史小說') && (await teacher.locator('input[name=rs07cat]:checked').count()) === 1,
       '07：重新整理後教師端還原已公開的選擇，投影也還原');
+    // ---------- F1：類型名稱與要素分開揭露（檢查投影 API 原始 JSON 與畫面） ----------
+    const leaks = (str, words) => words.filter((w) => str.includes(w));
     await teacher.click('button:has-text("← 上一環節")');
     await waitText(proj, '小說類型總覽');
     await proj.waitForFunction(() => document.body.innerText.includes('偵探小說'), null, { timeout: 12000 });
-    ok(true, '07 → 06：返回 06 時，總覽包含在 07 公開過的類型（揭露紀錄跨環節）');
+    await proj.waitForTimeout(2500);
+    {
+      const raw = lastProj(); const shown = await text(proj);
+      ok(true, '07 → 06：返回 06 時，總覽包含在 07 公開過的類型名稱');
+      ok(raw.includes('神祕案件') && leaks(raw + shown, ['尋找線索', '推理解謎']).length === 0,
+        'F1：07 只公開一個要素 → 返回 06 總覽，投影 API 與畫面只有該要素 ' + leaks(raw + shown, ['尋找線索', '推理解謎']));
+      ok(['歷史時代', '真實背景', '虛構故事'].every((w) => raw.includes(w) && shown.includes(w)), 'F1：06 已完整揭露的類型經過 07 後返回仍完整');
+    }
     await teacher.click('button:has-text("下一環節 →")');
     await waitText(proj, '小小故事分類師');
     await waitText(proj, '會魔法的故事');
     ok((await text(proj)).includes('會魔法的故事'), '07：返回 06 再進入 07，投影恢復 07 最後公開的對照（依綁定的快照）');
+    // 07 只公開類型名稱（零要素）→ 返回 06
+    await teacher.click('button.genre-btn:has-text("4. 冒險小說")');
+    await teacher.click('button:has-text("公開到投影")');
+    await waitText(proj, '冒險小說');
+    await teacher.click('button:has-text("← 上一環節")');
+    await waitText(proj, '小說類型總覽');
+    await proj.waitForFunction(() => document.body.innerText.includes('冒險小說'), null, { timeout: 12000 });
+    await proj.waitForTimeout(2500);
+    const HIDDEN = ['未知探索', '困難挑戰', '冒險旅程', '尋找線索', '推理解謎', '想像世界'];
+    {
+      const raw = lastProj(); const shown = await text(proj);
+      ok(leaks(raw + shown, HIDDEN).length === 0, 'F1：07 只公開名稱（零要素）→ 返回 06 總覽，三個要素都不在投影 API 與畫面中 ' + leaks(raw + shown, HIDDEN));
+      ok(shown.includes('冒險小說') && /"hidden":\s*true/.test(raw), 'F1：只公開名稱的類型在總覽顯示名稱，要素以未揭露位置呈現');
+      await proj.screenshot({ path: path.join(OUT, 'p06-overview-partial.png') });
+    }
+    // 重新整理（教師與投影）
+    await teacher.reload(); await proj.reload();
+    await waitText(proj, '冒險小說');
+    await teacher.waitForSelector('.genre-pick');
+    await proj.waitForTimeout(2500);
+    ok(leaks(lastProj() + await text(proj), HIDDEN).length === 0 && (await text(proj)).includes('神祕案件'), 'F1：重新整理後揭露範圍不變');
+    // 第二台教師裝置（沒有這台裝置的 localStorage）：重新送出 06 總覽、往返 07
+    {
+      const tc3 = await ctx(browser, { viewport: { width: 1366, height: 1000 } });
+      const t3 = await tc3.newPage();
+      t3.on('pageerror', (e) => errors.push('teacher3: ' + e.message));
+      await t3.goto(teacher.url());
+      await t3.waitForSelector('input[type=email], .genre-pick', { timeout: 15000 });
+      if (await t3.locator('input[type=email]').count()) {
+        await t3.fill('input[type=email]', 't1@example.com'); await t3.fill('input[type=password]', 'pass'); await t3.click('button[type=submit]');
+      }
+      await t3.waitForSelector('.genre-pick', { timeout: 15000 });
+      ok((await t3.locator('.genre-btn:has-text("3. 歷史小說")').textContent()).includes('✓')
+         && !(await t3.locator('.genre-btn:has-text("4. 冒險小說")').textContent()).includes('✓'),
+        'F1：第二台教師裝置只把完整揭露的類型標示為已揭開');
+      const n0 = projBodies.length;
+      await t3.click('text=06-03 顯示五種類型總覽');
+      await proj.waitForTimeout(3500);
+      ok(projBodies.length > n0 && leaks(lastProj() + await text(proj), HIDDEN).length === 0, 'F1：第二台教師裝置重新送出總覽，不擴大公開範圍');
+      await t3.click('button:has-text("下一環節 →")');
+      await waitText(proj, '小小故事分類師');
+      await t3.click('button:has-text("← 上一環節")');
+      await waitText(proj, '小說類型總覽');
+      await proj.waitForTimeout(3000);
+      ok(leaks(lastProj() + await text(proj), HIDDEN).length === 0 && (await text(proj)).includes('冒險小說') && (await text(proj)).includes('歷史時代'),
+        'F1：第二台教師裝置 07 → 06 往返後，揭露紀錄沒有遺失也沒有擴大');
+      await tc3.close();
+    }
+    await teacher.reload();
+    await teacher.waitForSelector('.genre-pick');
+    await teacher.click('button:has-text("下一環節 →")');
+    await waitText(proj, '小小故事分類師');
     await teacher.click('text=顯示結束畫面 →');
     await waitText(proj, '每一種分類，都從觀察開始。');
     await waitText(students[1].page, '每一種分類，都從觀察開始。');
@@ -1207,12 +1483,14 @@ async function inViewport(page, sel) {
 
     ok(errors.length === 0, '沒有任何前端執行錯誤 ' + errors.join(' | '));
     ok(externalRequests.length === 0, '沒有任何外部（CDN）請求 ' + externalRequests.join(' '));
+    if (softFails.length) { console.log(`\nSOFT_FAIL：${softFails.length} 項未通過`); softFails.forEach((m) => console.log('  NOT OK -', m)); process.exitCode = 1; }
     console.log(`\n全部通過：${passed} 項`);
   } catch (e) {
     console.error(e.message);
     console.error('page errors:', errors);
     process.exitCode = 1;
   } finally {
+    await pg.end().catch(() => {});
     await browser.close();
   }
 })();

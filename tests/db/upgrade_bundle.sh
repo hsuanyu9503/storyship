@@ -126,3 +126,51 @@ psql_ -d $DB3 -f "$ROOT/supabase/rollback/phase4_to_phase3.sql" >/dev/null 2>&1
 psql_ -d $DB3 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "回復後再升級失敗"
 verify_ok $DB3 || fail "回復後再升級的檢查未通過"
 echo "ok - 可回復到 Phase 3（快照不變）並再次升級到 Phase 4"
+
+# 6. 候選 A：Phase 3（89299af）停在 06 並已揭開部分類型時升級 → 進入 07 → 沒有 localStorage 的第二台裝置返回 06
+DB4=story_friends_bundle_p4_06
+mkdb $DB4 89299af
+psql_ -d $DB4 -c "insert into auth.users (id, email) values ('$T1', 't1@example.com'); insert into public.teachers values ('$T1', 't1@example.com');" >/dev/null
+SID=$(psql_ -d $DB4 -c "$TEACH" -c "select public.teacher_create_session('p4-06', 6)->>'session_id'" | tail -1)
+PK=$(psql_ -d $DB4 -c "select projector_key from public.sessions where id = '$SID'")
+st4() { psql_ -d $DB4 -c "$TEACH" -c "select public.teacher_set_stage('$SID', '$1', '$2', '$3', (select rev from public.session_state where session_id = '$SID'), true)->>'ok'" | tail -1; }
+st4 05 05 '{"screen":"placeholder"}' >/dev/null
+# Phase 3 教師端產生的 06 投影：已揭開第 0、2 類（總覽帶完整要素），第 1、3、4 類未揭開
+P3OV=$(psql_ -d $DB4 -c "select jsonb_build_object('screen','genre','view','overview',
+  'ctl', jsonb_build_object('view','overview','index',2,'revealed','[0,2]'::jsonb),
+  'genres', (select jsonb_agg(case when i in (0,2) then jsonb_build_object('name',name,'visual_url',null,'elements',elements) end order by i)
+               from (select (row_number() over (order by sort_order, slug) - 1)::int i, name, elements from public.genres) g))")
+[ "$(st4 06 06-03 "$P3OV")" = "true" ] || fail "Phase 3 版本無法進入 06"
+psql_ -d $DB4 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "停在 06 時升級失敗"
+verify_ok $DB4 || fail "停在 06 升級後檢查未通過"
+[ "$(st4 07 07 '{"screen":"placeholder","title":"小小故事分類師"}')" = "true" ] || fail "升級後無法進入 07"
+D=$(psql_ -d $DB4 -c "select disclosure::text from public.session_state where session_id = '$SID'")
+[ "$D" = '{"revealed": {"0": [0, 1, 2], "2": [0, 1, 2]}}' ] || fail "升級前已揭開的類型沒有正確保存：$D"
+# 第二台裝置沒有 localStorage：goPhase('06') 送出預設（recap），再按「顯示總覽」
+[ "$(st4 06 06-01 '{"screen":"genre","view":"recap","items":["a"],"ctl":{"view":"recap","index":0,"revealed":[]}}')" = "true" ] || fail "返回 06 失敗"
+[ "$(st4 06 06-03 '{"screen":"genre","view":"overview","ctl":{"view":"overview","index":0,"revealed":[]}}')" = "true" ] || fail "06 總覽失敗"
+PJ=$(psql_ -d $DB4 -c "set role anon" -c "select public.projector_state('$SID', '$PK')::text" | tail -1)
+for w in 奇幻小說 想像世界 神奇力量 超自然現象 歷史小說 歷史時代 真實背景 虛構故事; do echo "$PJ" | grep -q "$w" || fail "候選 A：升級前已揭開的內容遺失（$w）"; done
+for w in 偵探小說 神祕案件 冒險小說 未知探索; do echo "$PJ" | grep -q "$w" && fail "候選 A：升級後多揭露了 $w"; done
+echo "ok - 候選 A：Phase 3 停在 06 時升級 → 07 → 無 localStorage 的裝置返回 06：揭露紀錄沒有遺失、也沒有額外揭露"
+
+# 7. 已執行過修正前的 Phase 4 升級檔（97af137）的資料庫：舊格式揭露紀錄 → 再執行新升級檔
+DB5=story_friends_bundle_p4_old
+mkdb $DB5 89299af
+git -C "$ROOT" show 97af137:supabase/upgrade/upgrade.sql > "$TMP/old_p4.sql"; chmod 644 "$TMP/old_p4.sql"
+psql_ -d $DB5 -f "$TMP/old_p4.sql" >/dev/null 2>&1 || fail "97af137 升級檔執行失敗"
+psql_ -d $DB5 -c "insert into auth.users (id, email) values ('$T1', 't1@example.com'); insert into public.teachers values ('$T1', 't1@example.com');" >/dev/null
+SID=$(psql_ -d $DB5 -c "$TEACH" -c "select public.teacher_create_session('p4-old', 6)->>'session_id'" | tail -1)
+PK=$(psql_ -d $DB5 -c "select projector_key from public.sessions where id = '$SID'")
+st5() { psql_ -d $DB5 -c "$TEACH" -c "select public.teacher_set_stage('$SID', '$1', '$2', '$3', (select rev from public.session_state where session_id = '$SID'), true)->>'ok'" | tail -1; }
+st5 07 07 '{"screen":"placeholder"}' >/dev/null
+psql_ -d $DB5 -c "$TEACH" -c "select public.teacher_publish_match('$SID', '{\"genre\":1,\"elements\":[]}', (select rev from public.session_state where session_id = '$SID'))" >/dev/null
+[ "$(psql_ -d $DB5 -c "select disclosure::text from public.session_state where session_id = '$SID'")" = '{"genres": [1]}' ] || fail "前置：97af137 的舊格式揭露紀錄"
+psql_ -d $DB5 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 97af137 再升級失敗"
+verify_ok $DB5 || fail "從 97af137 再升級後檢查未通過"
+[ -z "$(psql_ -d $DB5 -c "select 1 from pg_proc where proname = 'disclose_genres'")" ] || fail "舊函式 disclose_genres 沒有移除"
+[ "$(st5 06 06-03 '{"screen":"genre","view":"overview","ctl":{"view":"overview","index":0,"revealed":[1]}}')" = "true" ] || fail "返回 06 失敗"
+PJ=$(psql_ -d $DB5 -c "set role anon" -c "select public.projector_state('$SID', '$PK')::text" | tail -1)
+echo "$PJ" | grep -q 偵探小說 || fail "舊格式紀錄中的類型名稱遺失"
+for w in 神祕案件 尋找線索 推理解謎 奇幻小說; do echo "$PJ" | grep -q "$w" && fail "舊格式紀錄被擴大解讀（$w）"; done
+echo "ok - 已執行 97af137 升級檔的資料庫再升級：舊格式揭露紀錄只視為名稱已公開、檢查全過、舊函式移除"

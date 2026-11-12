@@ -72,10 +72,13 @@ select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果）
           and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
             or (table_name = 'group_category_tombstones' and column_name = 'result'))) = 3
 union all
-select '17. Phase 4 函式存在且只開放給教師',
+select '17. Phase 4 函式存在且只開放給教師（含 06 伺服器產生投影）',
        to_regprocedure('public.teacher_publish_compare(uuid,jsonb,bigint)') is not null
        and to_regprocedure('public.teacher_publish_match(uuid,jsonb,bigint)') is not null
        and has_function_privilege('authenticated', 'public.teacher_preview_compare(uuid,jsonb)', 'execute')
        and not has_function_privilege('anon', 'public.teacher_preview_compare(uuid,jsonb)', 'execute')
        and not has_function_privilege('anon', 'public.teacher_publish_match(uuid,jsonb,bigint)', 'execute')
-       and not has_function_privilege('anon', 'app.compare_build(uuid,jsonb)', 'execute');
+       and not has_function_privilege('anon', 'app.compare_build(uuid,jsonb)', 'execute')
+       and to_regprocedure('app.genre_build(uuid,jsonb,jsonb)') is not null
+       and not has_function_privilege('anon', 'app.genre_build(uuid,jsonb,jsonb)', 'execute')
+       and not has_function_privilege('authenticated', 'app.genre_build(uuid,jsonb,jsonb)', 'execute');

@@ -158,6 +158,13 @@ select t.ok((public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'
             and jsonb_array_length(public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s5')) #> '{projection,sides,0,categories}') = 4
             and jsonb_array_length(public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s5', 'page', jsonb_build_object('left', 1))) #> '{projection,sides,0,categories}') = 2,
             'P4：六個分類分成兩頁（每頁 4 個），由教師翻頁');
+select t.ok((public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s5', 'per', jsonb_build_object('left', 1))) #>> '{projection,sides,0,pages}')::int = 6
+            and jsonb_array_length(public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s5', 'per', jsonb_build_object('left', 1), 'page', jsonb_build_object('left', 5))) #> '{projection,sides,0,categories}') = 1
+            and jsonb_array_length(public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s5', 'per', jsonb_build_object('left', 2), 'page', jsonb_build_object('left', 2))) #> '{projection,sides,0,categories}') = 2
+            and (public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s5', 'per', jsonb_build_object('left', 2))) #>> '{ctl,per,left}')::int = 2,
+            '候選 B：教師可改為每頁 2 類或 1 類（字級不變，改用翻頁）');
+select t.raises(format($$select public.teacher_preview_compare(%L, %L)$$, :'rs', jsonb_build_object('left', :'s5', 'per', jsonb_build_object('left', 3))), 'BAD_DATA', '候選 B：每頁分類數只能是 4／2／1');
+select t.raises(format($$select public.teacher_preview_compare(%L, %L)$$, :'rs', jsonb_build_object('left', :'s5', 'per', jsonb_build_object('left', 4), 'page', jsonb_build_object('left', 2))), 'BAD_DATA', '候選 B：頁數依每頁分類數驗證');
 select t.ok(jsonb_array_length(public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s1', 'focus', jsonb_build_object('left', '41000000-0000-4000-8000-000000000002'))) #> '{projection,sides,0,categories}') = 1,
             'P4：聚焦單一分類');
 select public.teacher_preview_compare(:'rs', jsonb_build_object('left', :'s4', 'reasons', jsonb_build_object('left', jsonb_build_array('44000000-0000-4000-8000-000000000001')))) as old \gset
@@ -217,13 +224,15 @@ reset role;
 set role authenticated;
 select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
 select rev as r from public.session_state where session_id = :'rs' \gset
-select public.teacher_set_stage(:'rs', '06', '06-02', '{"screen":"genre","view":"genre","ctl":{"view":"genre","index":2,"revealed":[0,2]}}', :r, false) is not null as x \gset
-select t.ok((select disclosure -> 'genres' from public.session_state where session_id = :'rs') = '[0, 2]'::jsonb, 'P4：06 公開的類型記錄在伺服器（跨環節保存）');
+select public.teacher_set_stage(:'rs', '06', '06-02', '{"screen":"genre","view":"genre","ctl":{"view":"genre","index":0,"reveal":true}}', :r, false) is not null as x \gset
 select rev as r from public.session_state where session_id = :'rs' \gset
-select t.raises(format($$select public.teacher_set_stage(%L, '06', '06-02', '{"screen":"genre","ctl":{"revealed":[99]}}', %s, false)$$, :'rs', :r), 'BAD_DATA', 'P4：不存在的類型索引被拒絕');
+select public.teacher_set_stage(:'rs', '06', '06-02', '{"screen":"genre","view":"genre","ctl":{"view":"genre","index":2,"reveal":true}}', :r, false) is not null as x \gset
+select t.ok((select disclosure from public.session_state where session_id = :'rs') = '{"revealed":{"0":[0,1,2],"2":[0,1,2]}}'::jsonb, 'P4：06 揭開的類型（名稱＋全部要素）記錄在伺服器（跨環節保存）');
+select rev as r from public.session_state where session_id = :'rs' \gset
+select t.raises(format($$select public.teacher_set_stage(%L, '06', '06-02', '{"screen":"genre","ctl":{"view":"genre","index":99,"reveal":true}}', %s, false)$$, :'rs', :r), 'BAD_DATA', 'P4：不存在的類型索引被拒絕');
 select rev as r from public.session_state where session_id = :'rs' \gset
 select t.ok((public.teacher_set_stage(:'rs', '07', '07', '{"screen":"placeholder","title":"小小故事分類師"}', :r, false)->>'ok')::boolean, 'P4：進入 07');
-select t.ok((select disclosure -> 'genres' from public.session_state where session_id = :'rs') = '[0, 2]'::jsonb, 'P4：進入 07 不會無條件公開全部類型');
+select t.ok((select disclosure from public.session_state where session_id = :'rs') = '{"revealed":{"0":[0,1,2],"2":[0,1,2]}}'::jsonb, 'P4：進入 07 不會無條件公開全部類型');
 reset role;
 set role anon;
 select t.ok(public.projector_state(:'rs', :'rpk')::text not like '%偵探小說%' and public.projector_state(:'rs', :'rpk')::text not like '%神祕案件%', 'P4：07 起始投影不含未公開的類型與要素');
@@ -248,7 +257,7 @@ select t.ok((:'pub'::jsonb #>> '{projection,scaffold}')::boolean and (:'pub'::js
 reset role;
 set role authenticated;
 select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
-select t.ok((select disclosure -> 'genres' from public.session_state where session_id = :'rs') = '[0, 1, 2]'::jsonb, 'P4：在 07 公開的類型加入揭露紀錄');
+select t.ok((select disclosure from public.session_state where session_id = :'rs') = '{"revealed":{"0":[0,1,2],"1":[0],"2":[0,1,2]}}'::jsonb, 'P4：在 07 公開的類型只加入名稱與當次公開的要素');
 select rev as r from public.session_state where session_id = :'rs' \gset
 select t.raises(format($$select public.teacher_preview_match(%L, %L)$$, :'rs', jsonb_build_object('genre', 1, 'elements', '[0]'::jsonb, 'highlights', '[1]'::jsonb)), 'BAD_DATA', 'P4：不能標示尚未揭露的要素');
 select t.raises(format($$select public.teacher_preview_match(%L, %L)$$, :'rs', jsonb_build_object('genre', 1, 'elements', '[3]'::jsonb)), 'BAD_DATA', 'P4：不合法的要素索引被拒絕');

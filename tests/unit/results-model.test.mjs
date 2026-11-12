@@ -73,3 +73,23 @@ test('05／07 未公開時的投影只有等待畫面，不含任何成果欄位
   assert.equal(p7.screen, 'placeholder');
   for (const p of [p5, p7]) assert.deepEqual(Object.keys(p).sort(), ['screen', 'sub', 'title']);
 });
+
+test('F1：揭露紀錄分開記錄名稱與要素；舊格式只算名稱', () => {
+  assert.deepEqual(R.disclosureMap({ revealed: { 0: [0, 1, 2], 1: [] } }), { 0: [0, 1, 2], 1: [] });
+  assert.deepEqual(R.disclosureMap({ genres: [2, 'x'] }), { 2: [] });
+  assert.deepEqual(R.disclosureMap({ genres: [1], revealed: { 1: [0] } }), { 1: [0] });
+  assert.deepEqual([...R.disclosedGenres({ revealed: { 3: [] } })], [3]);
+  assert.deepEqual([...R.disclosedGenres(null)], []);
+});
+
+test('F3：stableJson 不受鍵順序影響', () => {
+  assert.equal(R.stableJson({ b: 1, a: [{ y: 2, x: null }] }), R.stableJson({ a: [{ x: null, y: 2 }], b: 1 }));
+  assert.notEqual(R.stableJson({ a: 1 }), R.stableJson({ a: 2 }));
+});
+
+test('候選 B：每頁分類數只能是 4／2／1，改變時回到第一頁', () => {
+  const c = R.setPer({ ...R.emptyCompare(), page: { left: 1, right: 0 } }, 'left', 2);
+  assert.equal(c.per.left, 2); assert.equal(c.page.left, 0);
+  assert.equal(R.setPer(R.emptyCompare(), 'right', 3).per.right, 4);
+  assert.equal(R.canonCompare({ per: { left: '1' } }).per.left, 1);
+});

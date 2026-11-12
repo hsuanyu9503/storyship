@@ -6,7 +6,10 @@
 //   * 只有按「公開到投影」才呼叫 teacher_publish_*（帶 session_state.rev 版本檢查），
 //     伺服器保存選擇（綁定 snapshot ID）並產生投影資料；失敗時預覽不會被標成已公開。
 //   * 「投影中」區塊永遠顯示伺服器的公開狀態（projector_state），與投影端同一份資料。
-//   * 預覽請求帶序號，較晚回來的舊預覽一律忽略；快速連續按公開時，只在前一次完成後再送出最新的選擇。
+//   * 預覽綁定版本：每次修改選擇，該環節的草稿版本 ver 加一；預覽回應只在「請求時的版本＝目前版本」時採用，
+//     較舊（反序、失敗後才到）的回應一律丟棄。版本不符時預覽區標示「更新中」，「公開到投影」不能按。
+//   * 公開時固定送出當下的選擇（及其版本）；公開在途時的修改留在草稿，不會自動公開。
+//   * 「投影與預覽一致」同時比對：選擇與伺服器保存的選擇相同、預覽屬於目前版本、預覽內容與投影內容相同。
 import { rpc, errorText } from '../lib/api.js';
 import { h, toast, confirmDialog } from '../lib/dom.js';
 import * as R from '../lib/results-model.js';
@@ -18,59 +21,78 @@ export function createResults(ctx) {
   const { client, S } = ctx;
   const st = {
     draft: { '05': null, '07': null },
-    preview: { '05': null, '07': null },
-    previewErr: { '05': null, '07': null },
-    seq: 0,
-    shownSeq: { '05': 0, '07': 0 },
-    busy: false,
-    pending: null,
+    ver: { '05': 0, '07': 0 },                  // 草稿版本：每次修改選擇加一
+    preview: { '05': null, '07': null },        // { ver, projection }
+    previewErr: { '05': null, '07': null },     // { ver, msg }
+    inflight: { '05': null, '07': null },       // 進行中的預覽請求所屬版本
+    syncVer: { '05': -1, '07': -1 },            // 草稿與伺服器的公開選擇最後一次相同時的版本（之後沒修改就跟著伺服器）
+    busy: null,                                 // 公開在途：{ phase, ver }
     snapData: new Map(),   // snapshot id → data（教師閱讀與列出分類用）
   };
 
   const published = (phase) => (S.state?.stage_ctl || {})[phase] || null;
   const canon = (phase, c) => (phase === '05' ? R.canonCompare(c) : R.canonMatch(c));
   const same = (phase, a, b) => (phase === '05' ? R.sameCompare(a, b) : R.sameMatch(a, b));
+  const empty = (phase) => (phase === '05' ? R.emptyCompare() : R.emptyMatch());
 
   function draft(phase) {
-    if (!st.draft[phase]) st.draft[phase] = canon(phase, published(phase) || (phase === '05' ? R.emptyCompare() : R.emptyMatch()));
+    if (!st.draft[phase]) { st.draft[phase] = canon(phase, published(phase) || empty(phase)); st.syncVer[phase] = st.ver[phase]; }
     return st.draft[phase];
   }
-  function isDirty(phase) {
+  // 預覽屬於目前的選擇（版本相同且沒有錯誤）
+  const previewReady = (phase) => st.preview[phase]?.ver === st.ver[phase] && st.previewErr[phase]?.ver !== st.ver[phase];
+  const currentErr = (phase) => (st.previewErr[phase]?.ver === st.ver[phase] ? st.previewErr[phase].msg : null);
+  // 投影與預覽一致：選擇相同、預覽是目前版本、預覽內容＝投影內容
+  function isConsistent(phase) {
     const pub = published(phase);
-    return !same(phase, draft(phase), pub || (phase === '05' ? R.emptyCompare() : R.emptyMatch())) || !pub;
+    if (!pub || !same(phase, draft(phase), pub) || !previewReady(phase)) return false;
+    return R.stableJson(st.preview[phase].projection) === R.stableJson(S.pub?.projection);
   }
+  const isDirty = (phase) => !isConsistent(phase);
 
   // ---------- 預覽（只讀） ----------
   function setDraft(phase, next) {
     st.draft[phase] = canon(phase, next);
+    st.ver[phase] += 1;
     requestPreview(phase);
     ctx.renderAll();
   }
+  // 需要時才送出（目前版本沒有預覽、沒有錯誤、也沒有在途的請求）
+  function ensurePreview(phase) {
+    if (!previewReady(phase) && !currentErr(phase) && st.inflight[phase] !== st.ver[phase]) requestPreview(phase);
+  }
 
   async function requestPreview(phase) {
-    const seq = ++st.seq;
+    const ver = st.ver[phase];
+    const ctl = draft(phase);
+    st.inflight[phase] = ver;
     try {
       const r = await rpc(client, phase === '05' ? 'teacher_preview_compare' : 'teacher_preview_match',
-        { p_session: S.session.id, p_ctl: draft(phase) });
-      if (seq < st.shownSeq[phase]) return;            // 較舊的預覽晚到：忽略
-      st.shownSeq[phase] = seq;
-      st.preview[phase] = r.projection;
+        { p_session: S.session.id, p_ctl: ctl });
+      if (ver !== st.ver[phase]) return;                 // 選擇已改變：這份預覽不屬於目前的選擇，丟棄
+      st.preview[phase] = { ver, projection: r.projection };
       st.previewErr[phase] = null;
     } catch (e) {
-      if (seq < st.shownSeq[phase]) return;
-      st.shownSeq[phase] = seq;
-      st.previewErr[phase] = e.code === 'SAME_GROUP' ? '兩側不能是同一組。' : errorText(e);
+      if (ver !== st.ver[phase]) return;                 // 舊請求失敗後才到：不影響目前狀態
+      st.previewErr[phase] = { ver, msg: e.code === 'SAME_GROUP' ? '兩側不能是同一組。' : errorText(e) };
+    } finally {
+      if (st.inflight[phase] === ver) st.inflight[phase] = null;
     }
+    ctx.renderAll();
+  }
+  function retryPreview(phase) {
+    st.previewErr[phase] = null;
+    requestPreview(phase);
     ctx.renderAll();
   }
 
   // ---------- 公開 ----------
   async function publish(phase) {
-    if (st.busy) { st.pending = phase; return; }      // 前一次完成後，再以最新的選擇公開一次
-    st.busy = true;
+    if (st.busy || !previewReady(phase)) return;        // 一次一個；只有與目前選擇相符的預覽完成後才能公開
+    const sent = draft(phase);                           // 固定本次送出的選擇；之後的修改不會自動公開
+    st.busy = { phase, ver: st.ver[phase] };
     ctx.renderAll();
     try {
-      const sent = draft(phase);
       const r = await rpc(client, phase === '05' ? 'teacher_publish_compare' : 'teacher_publish_match',
         { p_session: S.session.id, p_ctl: sent, p_expected_rev: S.state.rev });
       if (!r.ok && r.code === 'STALE') {
@@ -82,9 +104,8 @@ export function createResults(ctx) {
       toast((e.code === 'SAME_GROUP' ? '兩側不能是同一組。' : errorText(e)) + '（尚未公開）', 'error', 5000);
     } finally {
       await ctx.refresh();
-      st.busy = false;
+      st.busy = null;
       ctx.renderAll();
-      if (st.pending) { const p = st.pending; st.pending = null; if (isDirty(p)) publish(p); }
     }
   }
 
@@ -136,20 +157,27 @@ export function createResults(ctx) {
 
   // ---------- 公開狀態列 ----------
   function statusBar(phase) {
-    const dirty = isDirty(phase);
-    return h('div.rs-bar',
-      !published(phase) ? h('span.rs-dirty', '○ 尚未公開任何內容（投影顯示等待畫面）')
-        : dirty ? h('span.rs-dirty', '○ 預覽中，有尚未公開的變更') : h('span.rs-clean', '● 投影與預覽一致'),
-      h('button.primary', { type: 'button', disabled: st.busy || Boolean(st.previewErr[phase]), onclick: () => publish(phase) },
-        st.busy ? '公開中…' : '公開到投影'),
-      dirty && published(phase) ? h('button', { type: 'button', onclick: () => setDraft(phase, published(phase)) }, '放棄變更（回到投影中的內容）') : null,
-      st.previewErr[phase] ? h('span.error', st.previewErr[phase]) : null);
+    const pub = published(phase);
+    const ready = previewReady(phase);
+    const err = currentErr(phase);
+    const mine = st.busy?.phase === phase;
+    const label = mine ? h('span.rs-dirty', '○ 公開中…（公開期間的修改不會自動公開）')
+      : !pub ? h('span.rs-dirty', '○ 尚未公開任何內容（投影顯示等待畫面）')
+      : isConsistent(phase) ? h('span.rs-clean', '● 投影與預覽一致')
+      : !ready && !err ? h('span.rs-dirty', '○ 預覽更新中…')
+      : h('span.rs-dirty', '○ 預覽中，有尚未公開的變更');
+    return h('div.rs-bar', label,
+      h('button.primary', { type: 'button', disabled: Boolean(st.busy) || !ready, onclick: () => publish(phase) },
+        mine ? '公開中…' : !ready && !err ? '預覽更新中…' : '公開到投影'),
+      pub && !same(phase, draft(phase), pub) ? h('button', { type: 'button', onclick: () => setDraft(phase, pub) }, '放棄變更（回到投影中的內容）') : null,
+      err ? h('span.error', err) : null,
+      err ? h('button', { type: 'button', onclick: () => retryPreview(phase) }, '重試預覽') : null);
   }
 
   // ---------- 05 ----------
   function panel05() {
     const d = draft('05');
-    if (!st.preview['05'] && !st.previewErr['05']) requestPreview('05');
+    ensurePreview('05');
     const rows = S.groups.map((g) => ({ g, latest: R.latestSnapshot(snaps(), g.id), count: R.snapshotsOf(snaps(), g.id).length,
       emptyOnly: !R.latestSnapshot(snaps(), g.id) && R.latestSnapshot(allSnaps(), g.id) }));
     const usable = rows.filter((r) => r.latest);
@@ -159,7 +187,7 @@ export function createResults(ctx) {
       const g = groupOfSnap(id);
       const cats = catsOf(id);
       const newer = R.newerSnapshot(snaps(), id);
-      const pv = (st.preview['05']?.sides || []).find((x) => x.side === name);
+      const pv = (st.preview['05']?.projection?.sides || []).find((x) => x.side === name);
       return h('div.rs-side',
         h('h4', `${name === 'left' ? '左側' : '右側'}：${g?.name || ''}`, h('span.tag', R.kindLabel(snaps().find((s) => s.id === id)?.kind)),
           snapSelect(g?.id, id, (v) => setDraft('05', R.setSide(d, name, v))),
@@ -173,6 +201,10 @@ export function createResults(ctx) {
           h('div.rs-bar',
             h('button.small', { type: 'button', onclick: () => setDraft('05', { ...d, reasons: { ...d.reasons, [name]: cats.map((c) => c.id) } }) }, '全部揭露'),
             h('button.small', { type: 'button', onclick: () => setDraft('05', { ...d, reasons: { ...d.reasons, [name]: [] } }) }, '全部收合'),
+            h('label.small', '每頁 ', h('select.small.rs-per', { onchange: (e) => setDraft('05', R.setPer(d, name, Number(e.target.value))) },
+              R.PER.map((n) => h('option', { value: n, selected: d.per[name] === n }, `${n} 類`)))),
+            h('button.small' + (d.zoom === name ? '.primary' : ''), { type: 'button',
+              onclick: () => setDraft('05', { ...d, zoom: d.zoom === name ? null : name }) }, d.zoom === name ? '取消放大（回到兩側）' : '放大此側（只投影這一側）'),
             h('label.small', '聚焦 ', h('select.small', { onchange: (e) => setDraft('05', { ...d, focus: { ...d.focus, [name]: e.target.value || null } }) },
               h('option', { value: '' }, '不聚焦（顯示全部）'), cats.map((c) => h('option', { value: c.id, selected: d.focus[name] === c.id }, catLabel(c))))),
             pv && pv.pages > 1 && !d.focus[name] ? h('span.small', '頁數 ',
@@ -208,8 +240,8 @@ export function createResults(ctx) {
   // ---------- 07 ----------
   function panel07() {
     const d = draft('07');
-    if (!st.preview['07'] && !st.previewErr['07']) requestPreview('07');
-    const disclosed = new Set(S.state?.disclosure?.genres || []);
+    ensurePreview('07');
+    const disclosed = R.disclosedGenres(S.state?.disclosure);
     const gs = S.content.genres;
     const groupsWith = S.groups.map((g) => ({ g, latest: R.latestSnapshot(snaps(), g.id) })).filter((x) => x.latest);
     const snapG = groupOfSnap(d.snapshot);
@@ -248,24 +280,45 @@ export function createResults(ctx) {
       h('p.muted', '不會自動配對、評分或改名；是否接近、接近哪一種，由全班討論。'));
   }
 
+  // 候選 B：預覽與投影用同一個繪製函式與以畫面寬度為單位的字級，預覽放不下＝投影也放不下。
+  // 量到有內容被裁切時提醒教師改用較少的每頁分類數或聚焦（不自動縮小字級）。
+  function fitCheck(stage, phase) {
+    const warn = h('p.rs-fit-warn', { hidden: true }, phase === '05'
+      ? '⚠ 投影放不下全部內容（部分被切掉）。請把「每頁」改成 2 類或 1 類，或使用「聚焦」。'
+      : '⚠ 投影放不下全部內容（部分被切掉）。請先不顯示理由，或改選故事較少的分類。');
+    const box = h('div.rs-fit', warn, stage);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!stage.isConnected) return;
+      const over = [stage, ...stage.querySelectorAll('.st-cats, .st-side, .st-match-left, .st-match-right, .st-cmp-body, .st-match-body')]
+        .some((e) => e.scrollHeight > e.clientHeight + 2);
+      warn.hidden = !over;
+      box.dataset.overflow = over ? '1' : '0';
+    }));
+    return box;
+  }
+
   function previewNode(phase) {
     if (phase !== '05' && phase !== '07') return null;
-    if (st.previewErr[phase]) return h('div.preview-box', h('p.error', st.previewErr[phase]));
-    if (!st.preview[phase]) return h('div.preview-box', h('p.muted', '預覽載入中…'));
-    return renderProjection({ ...S.pub, projection: st.preview[phase] }, { showQr: false });
+    const err = currentErr(phase);
+    if (err) return h('div.preview-box', h('p.error', '預覽失敗：' + err), h('button', { type: 'button', onclick: () => retryPreview(phase) }, '重試預覽'));
+    const pv = st.preview[phase];
+    if (!pv) return h('div.preview-box', h('p.muted', '預覽載入中…'));
+    const node = fitCheck(renderProjection({ ...S.pub, projection: pv.projection }, { showQr: false }), phase);
+    if (pv.ver === st.ver[phase]) return node;
+    // 舊預覽：明確標示過期，不能當成目前的選擇
+    return h('div.preview-stale', h('div.preview-stale-label', '⟳ 預覽更新中（下方是上一個選擇，已過期）'), node);
   }
 
   return {
     panel05, panel07, previewNode, isDirty,
-    // 每次重新讀取伺服器狀態時：若沒有尚未公開的變更，預覽跟著伺服器（例如另一台裝置公開了新內容）
+    // 每次重新讀取伺服器狀態時：若教師沒有尚未公開的修改，草稿跟著伺服器（例如另一台裝置公開了新內容）
     onLive() {
       for (const phase of ['05', '07']) {
-        if (st.draft[phase] && !st.busy && same(phase, st.draft[phase], st.lastPub?.[phase] || null)) {
-          st.draft[phase] = null; st.preview[phase] = null; st.previewErr[phase] = null;
-        }
+        if (!st.draft[phase] || st.busy?.phase === phase) continue;
+        if (same(phase, st.draft[phase], published(phase) || empty(phase))) st.syncVer[phase] = st.ver[phase];
+        else if (st.ver[phase] === st.syncVer[phase]) { st.draft[phase] = null; st.ver[phase] += 1; }   // 沒修改過：跟著伺服器
       }
-      st.lastPub = { '05': published('05'), '07': published('07') };
     },
-    key() { return JSON.stringify([st.draft, st.shownSeq, st.previewErr, st.busy, st.snapData.size]); },
+    key() { return JSON.stringify([st.draft, st.ver, st.preview['05']?.ver, st.preview['07']?.ver, st.previewErr, st.inflight, st.busy, st.snapData.size, S.pub?.projection]); },
   };
 }

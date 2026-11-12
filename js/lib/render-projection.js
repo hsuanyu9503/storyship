@@ -93,7 +93,7 @@ const SCREENS = {
     if (!sides.length) {
       return h('div.st-center', h('h1.st-title', p.title || '分類成果大公開'), h('p.st-sub.muted', '老師正在準備要展示的成果'));
     }
-    return h('div.st-compare' + (sides.length === 1 ? '.single' : ''),
+    return h('div.st-compare' + (sides.length === 1 ? '.single' : '') + (p.zoom ? '.zoom' : ''),
       h('div.st-cmp-head', h('h1.st-cmp-title', p.title || '分類成果大公開'),
         p.story ? h('span.st-cmp-track', '追蹤故事：', h('b', p.story.title)) : null),
       h('div.st-cmp-body', sides.map((sd) => h('section.st-side',
@@ -126,9 +126,11 @@ const SCREENS = {
             h('span.st-side-kind' + (p.group.kind === 'submitted' ? '' : '.locked'), p.group.kind === 'submitted' ? '小組正式提交' : '教師結束時保存（未正式提交）')) : null,
           c ? h('div.st-match-cat',
                 h('div.st-cat-name.big', c.label, c.unnamed ? h('span.st-unnamed', '（未命名）') : null),
-                h('div.st-match-cards', c.cards.map((x) => h('div.st-match-card', media(x.image_url, x.title, 'st-match-img'), h('span', x.title)))),
-                c.reason_state === 'shown' ? h('div.st-cat-reason', h('span.st-reason-label', '共同特色'), c.reason)
-                  : c.reason_state === 'empty' ? h('div.st-cat-reason.empty', '（這一類沒有寫共同特色）') : null)
+                // 顯示理由且故事較多時，故事改為名稱標籤（不放圖片），字級不變，讓理由完整可見
+                c.reason_state === 'shown' && c.cards.length > 3
+                  ? h('div.st-cat-cards.st-match-chips', c.cards.map((x) => h('span.st-chip-card', x.title)))
+                  : h('div.st-match-cards', c.cards.map((x) => h('div.st-match-card', media(x.image_url, x.title, 'st-match-img'), h('span', x.title)))),
+                c.reason_state === 'empty' ? h('div.st-cat-reason.empty', '（這一類沒有寫共同特色）') : null)
             : h('p.st-sub.muted', '老師正在選擇要對照的分類')),
         h('section.st-match-right',
           g ? h('div.st-match-genre',
@@ -138,6 +140,8 @@ const SCREENS = {
                   ? h('div.st-match-el' + (e.highlight ? '.hl' : ''), h('span.icon', e.icon || '◆'), h('span', e.label), e.highlight ? h('span.st-hl-tag', '相似') : null)
                   : h('div.st-match-el.hidden', h('span.icon', '？'), h('span', '核心要素')))))
             : h('div.st-match-genre.empty', h('div.st-mystery', '？'), h('p.st-sub', '這些故事和哪一種小說比較接近？')))),
+      // 共同特色（最多 300 字）放在左右對照下方、橫跨整個畫面，字級不變
+      c && c.reason_state === 'shown' ? h('div.st-cat-reason.st-match-reason', h('span.st-reason-label', '共同特色'), c.reason) : null,
       p.scaffold ? h('div.st-scaffold', TEXT.scaffold) : null);
   },
 
@@ -151,7 +155,9 @@ const SCREENS = {
       return h('div.st-overview', h('h1.st-title', '小說類型總覽'),
         h('div.st-ov-row', (p.genres || []).map((g) => g
           ? h('div.st-ov-card', h('div.st-ov-name', g.name),
-              h('ul', g.elements.map((e) => h('li', h('span.icon', e.icon), e.label))))
+              h('ul', (g.elements || []).map((e) => (e && !e.hidden
+                ? h('li', h('span.icon', e.icon), e.label)
+                : h('li.hidden', h('span.icon', '？'), '尚未揭露')))))
           : h('div.st-ov-card.hidden', h('div.st-ov-name', '？')))));
     }
     if (p.view === 'teaser' || !p.genre) {

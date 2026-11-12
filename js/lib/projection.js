@@ -126,6 +126,12 @@ export function genreProjection(genres, g) {
   };
 }
 
+// 明確的「揭開小說世界」：伺服器只在 ctl.reveal 為 true 時才把該類型（名稱＋全部要素）加入揭露紀錄
+export function genreRevealProjection(genres, g) {
+  const p = genreProjection(genres, g);
+  return { ...p, ctl: { ...p.ctl, reveal: true } };
+}
+
 export const genreOps = {
   recap: (genres, g) => ({ ...g, view: 'recap' }),
   goto: (genres, g, i) => {

@@ -52,7 +52,8 @@ export function snapshotToBoard(data, cards) {
 
 // ---------- 05 的選擇 ----------
 export function emptyCompare() {
-  return { left: null, right: null, story: null, reasons: { left: [], right: [] }, page: { left: 0, right: 0 }, focus: { left: null, right: null } };
+  return { left: null, right: null, story: null, reasons: { left: [], right: [] }, page: { left: 0, right: 0 }, focus: { left: null, right: null },
+           per: { left: 4, right: 4 }, zoom: null };
 }
 
 // 與伺服器回傳的 ctl 相同形狀，方便比較「是否有尚未公開的變更」
@@ -63,6 +64,8 @@ export function canonCompare(ctl) {
     reasons: { left: [...(c.reasons?.left || [])].sort(), right: [...(c.reasons?.right || [])].sort() },
     page: { left: Number(c.page?.left) || 0, right: Number(c.page?.right) || 0 },
     focus: { left: c.focus?.left || null, right: c.focus?.right || null },
+    per: { left: PER.includes(Number(c.per?.left)) ? Number(c.per.left) : 4, right: PER.includes(Number(c.per?.right)) ? Number(c.per.right) : 4 },
+    zoom: (c.zoom === 'left' && c.left) || (c.zoom === 'right' && c.right) ? c.zoom : null,
   };
 }
 
@@ -75,6 +78,15 @@ export function setSide(ctl, side, snapshotId) {
   const c = canonCompare(ctl);
   c[side] = snapshotId;
   c.reasons[side] = []; c.page[side] = 0; c.focus[side] = null;
+  return c;
+}
+
+// 每頁分類數（4／2／1）：內容較長時由教師改成較少，投影字級不變；改變時回到第一頁
+export const PER = [4, 2, 1];
+export function setPer(ctl, side, per) {
+  const c = canonCompare(ctl);
+  c.per[side] = PER.includes(per) ? per : 4;
+  c.page[side] = 0;
   return c;
 }
 
@@ -134,4 +146,24 @@ export function toggleHighlight(ctl, i) {
   if (!c.elements.includes(i)) return c;
   const hl = c.highlights.includes(i) ? c.highlights.filter((x) => x !== i) : [...c.highlights, i].sort((a, b) => a - b);
   return { ...c, highlights: hl };
+}
+
+// 揭露紀錄 {"revealed":{"<類型索引>":[要素索引]}}：回傳「名稱已公開」的類型索引。
+// 舊格式 {"genres":[…]} 只視為名稱已公開（與伺服器 app.disc_map 相同）。
+export function disclosureMap(disc) {
+  const m = {};
+  for (const x of Array.isArray(disc?.genres) ? disc.genres : []) if (Number.isInteger(x)) m[x] = [];
+  const r = disc?.revealed && typeof disc.revealed === 'object' && !Array.isArray(disc.revealed) ? disc.revealed : {};
+  for (const [k, v] of Object.entries(r)) if (/^\d+$/.test(k)) m[Number(k)] = Array.isArray(v) ? v.filter(Number.isInteger) : [];
+  return m;
+}
+export function disclosedGenres(disc) {
+  return new Set(Object.keys(disclosureMap(disc)).map(Number));
+}
+
+// 鍵排序後的 JSON（比較預覽與投影內容是否相同，不受鍵順序影響）
+export function stableJson(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+  return JSON.stringify(v ?? null);
 }
