@@ -54,6 +54,7 @@ export const ERROR_TEXT = {
   REMOVED: '老師已將你移出小組。',
   PAUSED: '老師暫停了編輯，請先看前方。',
   SUBMITTED: '已經提交，不能再修改。',
+  PERSONAL_LOCKED: '老師已結束個人分類，你的成果已保存。',
   SESSION_FULL: '活動人數已達上限，請洽老師。',
   BAD_DATA: '資料格式錯誤，請重新整理頁面。',
   TOO_LONG: '文字太長了，請縮短一點。',

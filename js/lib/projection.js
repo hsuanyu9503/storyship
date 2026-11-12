@@ -77,7 +77,7 @@ export function taskProjection() {
 }
 
 export function instructionProjection(phaseId) {
-  if (phaseId === '03') return { screen: 'instruction', title: '我的故事分類', text: TEXT.personal };
+  if (phaseId === '03') return { screen: 'instruction', title: '我的故事分類', text: '', items: TEXT.personalSteps };
   if (phaseId === '04') return { screen: 'instruction', title: '故事找朋友：小組共作', text: TEXT.group };
   return { screen: 'instruction', title: '', text: '' };
 }

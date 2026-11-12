@@ -81,7 +81,8 @@ const SCREENS = {
       h('div.st-tip', '② 新增分類，把故事放進去'),
       h('div.st-tip', '③ 幫每一類取名字'))),
 
-  instruction: (p) => h('div.st-center', h('h1.st-title', p.title), h('p.st-lead', p.text)),
+  instruction: (p) => h('div.st-center', h('h1.st-title', p.title), p.text ? h('p.st-lead', p.text) : null,
+    p.items?.length ? h('ol.st-steps', p.items.map((x) => h('li', x))) : null),
 
   placeholder: (p) => h('div.st-center', h('h1.st-title', p.title), h('p.st-sub.muted', '（此環節的展示功能將於 Phase 4 完成）')),
 

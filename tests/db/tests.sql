@@ -205,6 +205,9 @@ select t.raises(format($$select public.student_save_personal(%L, %L, '{"categori
 select t.ok(not (public.student_state(:'sid', :'tokA1')->'can'->>'personal_edit')::boolean, '提交後 personal_edit = false');
 select t.ok((public.student_reopen_personal(:'sid', :'tokA1')->>'ok')::boolean, '03 環節內可繼續修改');
 select t.ok((public.student_submit_personal(:'sid', :'tokA1', 5)->>'ok')::boolean, '再次提交');
+select (public.student_personal(:'sid', :'tokA1')->>'rev') as a1rev \gset
+select t.ok((public.student_submit_personal(:'sid', :'tokA1', :'a1rev')->>'ok')::boolean
+            and (public.student_personal(:'sid', :'tokA1')->>'rev') = :'a1rev', '重複提交：回傳成功且不產生新版本');
 reset role;
 
 -- 暫停全班編輯
@@ -235,6 +238,60 @@ select t.ok((select jsonb_array_length(data->'categories') = 2 from public.perso
               where p.token_hash = encode(sha256(convert_to(:'tokB1', 'UTF8')), 'hex')), 'B1 已儲存的部分成果在快照中');
 create table t.personal_before as select participant_id, data, rev from public.personal_boards;
 create table t.psnap_before as select participant_id, data, taken_at from public.personal_snapshots;
+
+-- ======================================================================
+-- 6b. Phase 2：個人分類鎖定、快照保存、資料隔離
+-- ======================================================================
+set role anon;
+select t.ok((public.student_state(:'sid', :'tokB1')->'personal'->>'locked')::boolean, '04：學生端看到個人分類已鎖定');
+reset role;
+-- 教師返回 03：不得自動解除鎖定
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select rev as r from public.session_state where session_id = :'sid' \gset
+select t.ok((public.teacher_set_stage(:'sid', '03', '03', '{"screen":"instruction"}', :r, false)->>'ok')::boolean, '教師返回 03');
+reset role;
+set role anon;
+select t.ok(not (public.student_state(:'sid', :'tokB1')->'can'->>'personal_edit')::boolean, '返回 03：personal_edit 仍為 false');
+select (public.student_personal(:'sid', :'tokB1')->>'rev') as b1rev \gset
+select t.raises(format($$select public.student_save_personal(%L, %L, '{"categories":[],"placements":{}}', %s)$$, :'sid', :'tokB1', :'b1rev'), 'PERSONAL_LOCKED', '返回 03：未完成學生不能覆寫（即使版本正確）');
+select t.raises(format($$select public.student_reopen_personal(%L, %L)$$, :'sid', :'tokA1'), 'PERSONAL_LOCKED', '返回 03：已提交學生不能「繼續修改」');
+select t.raises(format($$select public.student_submit_personal(%L, %L, %s)$$, :'sid', :'tokB1', :'b1rev'), 'PERSONAL_LOCKED', '返回 03：鎖定後不能提交');
+select t.ok((public.student_personal(:'sid', :'tokB1')->>'locked')::boolean
+            and public.student_personal(:'sid', :'tokB1')->'snapshot' is not null, '返回 03：學生仍可讀取自己的唯讀快照');
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select rev as r from public.session_state where session_id = :'sid' \gset
+select t.ok((public.teacher_set_stage(:'sid', '04', '04', '{"screen":"instruction"}', :r, false)->>'ok')::boolean, '再次進入 04');
+reset role;
+select t.ok((select count(*) from public.personal_snapshots where session_id = :'sid') = 13
+            and not exists (select 1 from public.personal_snapshots s join t.psnap_before o using (participant_id)
+                             where s.data is distinct from o.data or s.taken_at <> o.taken_at),
+            '再次進入 04 不覆寫第一次的原始快照');
+select t.ok(not exists (select 1 from public.personal_boards b join t.personal_before o using (participant_id)
+                         where b.data is distinct from o.data or b.rev <> o.rev), '鎖定後個人草稿完全沒有被改動');
+-- 快照的「完成」必須是學生正式提交過且資料完整
+select t.ok(not exists (select 1 from public.personal_snapshots where is_complete and not submitted), '未提交者的快照一律標示未完成');
+
+-- 資料隔離：其他教師、投影端都取不到個人成果
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T3', false) as _ \gset
+select t.ok((select count(*) from public.personal_boards) = 0 and (select count(*) from public.personal_snapshots) = 0,
+            '其他教師讀不到這個場次的個人分類（RLS）');
+reset role;
+set role anon;
+select t.ok(public.projector_state(:'sid', :'pkey')::text not like '%placements%', '投影端資料不含任何個人分類內容');
+select t.raises('select * from public.personal_snapshots', 'DENIED', 'anon 不能直接讀個人快照');
+reset role;
+
+-- 暫時名稱「分類 N」不算正式命名（與前端 board-model.js 規則一致）
+select id as setid from public.content_sets where is_default \gset
+select string_agg(format('"%s":"c1"', id), ',') as allc1b from public.story_cards where content_set_id = :'setid' \gset
+select t.ok(not (app.personal_problems(format('{"categories":[{"id":"c1","no":1,"name":"分類 1"}],"placements":{%s}}', :'allc1b')::jsonb, :'setid')->>'complete')::boolean, '名稱為「分類 1」時不能提交');
+select t.ok(not (app.personal_problems(format('{"categories":[{"id":"c1","no":1,"name":"分類１"}],"placements":{%s}}', :'allc1b')::jsonb, :'setid')->>'complete')::boolean, '名稱為「分類１」（全形）時不能提交');
+select t.ok((app.personal_problems(format('{"categories":[{"id":"c1","no":1,"name":"分類一下就知道"}],"placements":{%s}}', :'allc1b')::jsonb, :'setid')->>'complete')::boolean, '其他以「分類」開頭的正式名稱可以提交');
+select t.ok((app.personal_problems(format('{"categories":[{"id":"c1","no":3,"name":""}],"placements":{%s}}', :'allc1b')::jsonb, :'setid')->'unnamed_no'->>0) = '3', '未命名提示回傳分類編號（顯示「請為分類 3 取一個名稱」）');
 
 -- ======================================================================
 -- 7. 小組共作：空白開始、同步、衝突保護
