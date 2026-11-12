@@ -119,6 +119,10 @@ async function inViewport(page, sel) {
     const pc = await ctx(browser, { viewport: { width: 1600, height: 900 } });
     const proj = await pc.newPage();
     proj.on('pageerror', (e) => errors.push('projector: ' + e.message));
+    // 投影端收到的每一份 projector_state 回應（用來確認未公開的內容不在 API 回應中）
+    const projBodies = [];
+    proj.on('response', async (r) => { if (r.url().includes('/rpc/projector_state')) { try { projBodies.push(await r.text()); } catch { /* 頁面已關閉 */ } } });
+    const lastProj = () => projBodies[projBodies.length - 1] || '';
     await proj.goto(projHref);
     await waitText(proj, '各組加入狀態');
     await proj.waitForSelector('.st-qr img', { timeout: 10000 });
@@ -801,6 +805,31 @@ async function inViewport(page, sel) {
       ok(true, '第三輪複檢 N1：A 真正離開欄位後鎖才解除');
     }
 
+    // N1（Phase 4 補測）：舊的釋放第一次送出遇到網路錯誤，等待重送期間重新聚焦同一欄位 → 重送的舊釋放不得解除新的鎖
+    if (!process.env.SKIP_N1) {
+      const cat2 = await catIdOf(s0, 2);
+      let firstRelease = true; let acquires = 0; const renewHold = deferred();
+      await s0.route('**/rest/v1/rpc/group_lock', async (route) => {
+        const b = body(route.request());
+        if (b.p_target === 'name:' + cat2 && b.p_release && firstRelease) { firstRelease = false; return route.abort('failed'); }
+        if (b.p_target === 'name:' + cat2 && !b.p_release && ++acquires > 2) await renewHold.p;
+        return route.continue().catch(() => {});
+      });
+      await gCat(s0, 2).locator('.bd-name').tap();            // 取得
+      await s0.waitForTimeout(700);
+      await gCat(s0, 2).locator('.bd-name').blur();           // 釋放 → 網路錯誤，等待重送
+      await s0.waitForTimeout(400);
+      await s0.locator(`${G} .bd-cat >> nth=2 >> .bd-name`).waitFor({ state: 'visible', timeout: 15000 });
+      await gCat(s0, 2).locator('.bd-name').tap();            // 重新聚焦：再次取得
+      await s0.waitForTimeout(6000);                          // 舊的釋放已重送（指數退避 2～4 秒）
+      const lockedN1b = await s1.evaluate(() => document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-name')?.readOnly);
+      renewHold.res();
+      await gCat(s0, 2).locator('.bd-name').blur();
+      await s0.unroute('**/rest/v1/rpc/group_lock');
+      ok(lockedN1b, '第三輪複檢 N1（補測）：網路錯誤後重送的舊釋放沒有解除重新聚焦後的鎖');
+      await s1.waitForFunction(() => !document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-name')?.readOnly, null, { timeout: 15000 });
+    }
+
     // N2：刪除已寫入但回應遺失，重送後接續的移動仍必須成功（不能用刪除前的版本）
     if (!process.env.SKIP_N2) {
       await s0.click(`${G} .bd-add`);
@@ -999,6 +1028,101 @@ async function inViewport(page, sel) {
     ok(pill0.includes('05'), '05：教師確認後結束共同分類，進入第五環節');
     await s3c.close();
 
+    // ---------- 05｜分類成果大公開（Phase 4） ----------
+    const panel = () => teacher.textContent('section.panel');
+    await waitText(proj, '比一比：兩組的分類有什麼不同？');
+    await teacher.waitForSelector('.rs-grid');
+    const p05 = await panel();
+    ok(/第 1 組[\s\S]*小組正式提交/.test(p05) && /第 2 組[\s\S]*教師結束時保存/.test(p05) && /第 3 組[\s\S]*沒有可展示的成果/.test(p05),
+      '05：各組成果概覽區分「正式提交／教師結束保存／沒有可展示的成果」（依實際組數）');
+    ok(p05.includes('共 2 份'), '05：同一組多次提交時顯示份數，預設使用最新');
+    const rg = (n) => teacher.locator(`.rs-group:has(b:text-is("第 ${n} 組"))`);
+    const projBefore = await text(proj); const nBodies = projBodies.length;
+    await rg(1).locator('button:has-text("放左側")').click();
+    await rg(2).locator('button:has-text("放右側")').click();
+    await teacher.selectOption('select.rs-story', { label: '故事 A' });
+    await teacher.locator('.rs-side').first().locator('.rs-cats input[type=checkbox]').first().check();
+    await teacher.waitForFunction(() => document.querySelector('.previews')?.innerText.includes('主角都有神奇的力量'), null, { timeout: 10000 });
+    ok((await teacher.textContent('.previews')).includes('預覽（僅教師可見，尚未公開）'), '05：教師端清楚標示「預覽，尚未公開」');
+    await proj.waitForTimeout(4500);
+    ok((await text(proj)) === projBefore && projBodies.slice(nBodies).every((b) => !b.includes('主角都有神奇的力量') && !b.includes('"compare"')),
+      '05：私下選組、選故事、揭露理由時，投影畫面與投影 API 回應都不變');
+    await rg(1).locator('button:has-text("放右側")').click();
+    await waitText(teacher, '兩側不能是同一組');
+    ok(!(await teacher.textContent('.rs-side >> nth=1')).includes('第 1 組'), '05：不能把同一組放在兩側');
+    await teacher.click('button:has-text("公開到投影")');
+    await waitText(proj, '追蹤故事：');
+    const pc5 = await text(proj);
+    ok(pc5.includes('第 1 組') && pc5.includes('第 2 組') && pc5.includes('會魔法的故事') && pc5.includes('主角都有神奇的力量'), '05：公開後投影顯示雙組、分類名稱、已揭露的理由');
+    ok(pc5.includes('小組正式提交') && pc5.includes('教師結束時保存（未正式提交）'), '05：投影區分正式提交與教師結束保存');
+    await proj.waitForTimeout(2500);
+    ok(!lastProj().includes('主角都要勇敢克服困難') && lastProj().includes('"hidden"'), '05：未揭露的理由不在投影 API 回應中（只有 hidden 狀態）');
+    ok((await text(teacher)).includes('投影與預覽一致'), '05：公開後教師端顯示投影與預覽一致');
+    await proj.screenshot({ path: path.join(OUT, 'p05-compare.png') });
+    // 追蹤第 2 組沒有分類的故事
+    await teacher.selectOption('select.rs-story', { label: '故事 C' });
+    await waitText(teacher, '有尚未公開的變更');
+    await teacher.click('button:has-text("公開到投影")');
+    await proj.waitForFunction(() => document.body.innerText.includes('尚未分類') && document.body.innerText.includes('「故事 C」'), null, { timeout: 10000 });
+    ok(true, '05：指定故事在一組有分類、另一組顯示「尚未分類」');
+    // 重新整理：教師與投影都還原公開狀態
+    await teacher.reload();
+    await teacher.waitForSelector('.rs-grid');
+    await proj.reload();
+    await waitText(proj, '「故事 C」');
+    ok((await text(teacher)).includes('投影與預覽一致') && (await text(proj)).includes('主角都有神奇的力量'), '05：教師與投影重新整理後還原已公開的狀態');
+    // 第二台教師裝置：競爭公開與延遲回應
+    const tc2 = await ctx(browser, { viewport: { width: 1366, height: 1000 } });
+    const t2 = await tc2.newPage();
+    t2.on('pageerror', (e) => errors.push('teacher2: ' + e.message));
+    await t2.goto(teacher.url());   // 同一位教師的第二台裝置（另一個瀏覽器 context，需重新登入）
+    await t2.waitForSelector('input[type=email], .rs-grid', { timeout: 15000 });
+    if (await t2.locator('input[type=email]').count()) {
+      await t2.fill('input[type=email]', 't1@example.com'); await t2.fill('input[type=password]', 'pass'); await t2.click('button[type=submit]');
+    }
+    await t2.waitForSelector('.rs-grid', { timeout: 15000 });
+    const hold = deferred();
+    await teacher.route('**/rpc/teacher_publish_compare', async (route) => { await hold.p; return route.continue().catch(() => {}); });
+    await teacher.selectOption('select.rs-story', { label: '不追蹤（清除醒目標示）' });
+    await teacher.click('button:has-text("公開到投影")');                 // 裝置 1：請求延遲
+    await t2.locator('.rs-side').nth(1).locator('button:has-text("全部揭露")').click();
+    await t2.waitForFunction(() => document.body.innerText.includes('有尚未公開的變更'), null, { timeout: 8000 });
+    await t2.click('button:has-text("公開到投影")');                      // 裝置 2：先完成
+    await proj.waitForFunction(() => document.body.innerText.includes('「故事 C」') && !document.body.innerText.includes('等一下揭曉\n') , null, { timeout: 10000 }).catch(() => {});
+    await proj.waitForTimeout(2500);
+    console.log('DIAG t2', (await t2.textContent('.rs-bar >> nth=-1')).slice(0, 120), '| t2 url', t2.url().slice(-50));
+    hold.res();                                                           // 裝置 1 的舊版本請求現在才到
+    try { await waitText(teacher, '另一台裝置更新'); }
+    catch (e) { console.log('DIAG t1', (await teacher.textContent('body')).slice(0, 300)); throw e; }
+    await teacher.unroute('**/rpc/teacher_publish_compare');
+    await proj.waitForTimeout(2500);
+    const afterRace = await text(proj);
+    ok(afterRace.includes('「故事 C」'), '05：兩台教師裝置同時公開 → 較晚到的舊版本請求被拒絕，投影維持較新的內容');
+    ok((await text(teacher)).includes('有尚未公開的變更'), '05：被拒絕的裝置保留自己的預覽並標示尚未公開');
+    // 快速連續公開：最後一次的選擇為準
+    await t2.selectOption('select.rs-story', { label: '故事 D' });
+    await t2.click('button:has-text("公開到投影")');
+    await t2.selectOption('select.rs-story', { label: '故事 E' });
+    await t2.click('button:has-text("公開到投影")');
+    await t2.selectOption('select.rs-story', { label: '故事 F' });
+    await t2.click('button:has-text("公開到投影")');
+    await proj.waitForFunction(() => document.body.innerText.includes('「故事 F」'), null, { timeout: 15000 });
+    await proj.waitForTimeout(3000);
+    ok((await text(proj)).includes('「故事 F」') && (await text(t2)).includes('投影與預覽一致'), '05：快速連續公開，投影停在最後一次的選擇');
+    await t2.screenshot({ path: path.join(OUT, 't05-panel.png') });
+    // 教師平板：橫向、直向
+    for (const [w, hgt, name] of [[1024, 768, 'landscape'], [768, 1024, 'portrait']]) {
+      await t2.setViewportSize({ width: w, height: hgt });
+      await t2.waitForTimeout(300);
+      await t2.locator('button:has-text("公開到投影")').scrollIntoViewIfNeeded();
+      ok(await t2.locator('button:has-text("公開到投影")').isVisible() && (await t2.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)),
+        `05：教師平板${name === 'landscape' ? '橫向' : '直向'}時「公開到投影」可見、無水平捲動`);
+      await t2.screenshot({ path: path.join(OUT, `t05-${name}.png`) });
+    }
+    await tc2.close();
+    await teacher.reload();
+    await teacher.waitForSelector('.rs-grid');
+
     // ---------- 06：私下預覽不影響投影 ----------
     await teacher.click('text=進入第六環節 →');
     await waitText(proj, '分類背後的祕密');
@@ -1023,9 +1147,52 @@ async function inViewport(page, sel) {
     await waitText(proj, '小說類型總覽');
     ok(true, '返回上一環節再前進，投影恢復先前的畫面狀態');
 
-    // ---------- 07 → 結束 ----------
+    // ---------- 07｜小小故事分類師（Phase 4） ----------
     await teacher.click('button:has-text("下一環節 →")');
     await waitText(proj, '小小故事分類師');
+    await teacher.waitForSelector('.genre-pick');
+    const p07 = await lastProj();
+    ok(!p07.includes('神祕案件') && !p07.includes('歷史時代'), '07：起始投影不含任何類型要素（不自動展開）');
+    ok(/3\. 歷史小說 ✓/.test(await panel()), '07：06 已公開的類型在 07 標示 ✓（跨環節保存）');
+    await teacher.selectOption('.rs-side select', { label: '第 1 組（小組正式提交）' });
+    await teacher.locator('input[name=rs07cat]').first().check();
+    await teacher.click('button.genre-btn:has-text("2. 偵探小說")');
+    await teacher.locator('.rs-el').first().locator('input').first().check();
+    await teacher.locator('.rs-el').first().locator('input').nth(1).check();
+    await teacher.locator('label:has-text("顯示句型鷹架") input').check();
+    await teacher.waitForFunction(() => document.querySelector('.previews')?.innerText.includes('相似'), null, { timeout: 10000 });
+    await proj.waitForTimeout(3500);
+    ok(!(await text(proj)).includes('偵探小說') && !lastProj().includes('神祕案件'), '07：私下預覽類型與要素時，投影與 API 回應都不變');
+    await teacher.click('button:has-text("公開到投影")');
+    await waitText(proj, '偵探小說');
+    const pm = await text(proj);
+    ok(pm.includes('會魔法的故事') && pm.includes('神祕案件') && pm.includes('相似') && pm.includes('我們把這些故事分在一起，是因為'),
+      '07：投影左側原始分類、右側類型與已揭露要素、相似標示、句型鷹架');
+    await proj.waitForTimeout(2500);
+    ok(!lastProj().includes('尋找線索') && !lastProj().includes('推理解謎') && !lastProj().includes('教師補充'), '07：未揭露的要素與教師補充不在投影 API 回應中');
+    await proj.screenshot({ path: path.join(OUT, 'p07-match.png') });
+    // 更換類型：不殘留上一種類型的標示
+    await teacher.click('button.genre-btn:has-text("3. 歷史小說")');
+    ok((await teacher.locator('.rs-el input:checked').count()) === 0, '07：更換類型時清除要素揭露與相似標示');
+    await teacher.click('button:has-text("公開到投影")');
+    await waitText(proj, '歷史小說');
+    await proj.waitForTimeout(2500);
+    ok(!(await text(proj)).includes('相似') && !lastProj().includes('神祕案件') && !lastProj().includes('歷史時代'), '07：新類型的要素未揭露、沒有殘留的相似標示');
+    // 重新整理、返回 06 再前進：還原
+    await teacher.reload(); await proj.reload();
+    await waitText(proj, '歷史小說');
+    await teacher.waitForSelector('.genre-pick');
+    await waitText(teacher, '投影與預覽一致');
+    ok((await teacher.locator('.genre-btn.sel').textContent()).includes('歷史小說') && (await teacher.locator('input[name=rs07cat]:checked').count()) === 1,
+      '07：重新整理後教師端還原已公開的選擇，投影也還原');
+    await teacher.click('button:has-text("← 上一環節")');
+    await waitText(proj, '小說類型總覽');
+    await proj.waitForFunction(() => document.body.innerText.includes('偵探小說'), null, { timeout: 12000 });
+    ok(true, '07 → 06：返回 06 時，總覽包含在 07 公開過的類型（揭露紀錄跨環節）');
+    await teacher.click('button:has-text("下一環節 →")');
+    await waitText(proj, '小小故事分類師');
+    await waitText(proj, '會魔法的故事');
+    ok((await text(proj)).includes('會魔法的故事'), '07：返回 06 再進入 07，投影恢復 07 最後公開的對照（依綁定的快照）');
     await teacher.click('text=顯示結束畫面 →');
     await waitText(proj, '每一種分類，都從觀察開始。');
     await waitText(students[1].page, '每一種分類，都從觀察開始。');

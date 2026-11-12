@@ -87,9 +87,10 @@ export function instructionProjection(phaseId) {
   return { screen: 'instruction', title: '', text: '' };
 }
 
-// 第五、七環節：Phase 4 實作；Phase 1 先提供不含任何小組資料的佔位畫面
-export function placeholderProjection(title) {
-  return { screen: 'placeholder', title };
+// 第五、七環節：尚未公開任何成果時的等待畫面（不含任何小組資料）。
+// 成果畫面（screen: compare／match）只能由伺服器依白名單產生（teacher_publish_compare／teacher_publish_match）。
+export function placeholderProjection(title, sub) {
+  return sub ? { screen: 'placeholder', title, sub } : { screen: 'placeholder', title };
 }
 
 // 第六環節
@@ -153,12 +154,12 @@ export function defaultProjection(phaseId, content) {
     case '02': return { sub: '02', projection: taskProjection() };
     case '03':
     case '04': return { sub: phaseId, projection: instructionProjection(phaseId) };
-    case '05': return { sub: '05', projection: placeholderProjection('分類成果大公開') };
+    case '05': return { sub: '05', projection: placeholderProjection('分類成果大公開', '比一比：兩組的分類有什麼不同？') };
     case '06': {
       const g = genreInitial();
       return { sub: genreSub(g), projection: genreProjection(content.genres || [], g) };
     }
-    case '07': return { sub: '07', projection: placeholderProjection('小小故事分類師') };
+    case '07': return { sub: '07', projection: placeholderProjection('小小故事分類師', '我們的分類，和哪一種小說比較接近？') };
     case '99': return { sub: '99', projection: endProjection() };
     default: return { sub: '', projection: {} };
   }

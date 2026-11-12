@@ -23,3 +23,4 @@ done
 echo "schema OK（含重跑 002／003／seed 的可重複執行檢查）"
 psql_ -d "$DB" -f "$HERE/tests.sql"
 psql_ -d "$DB" -f "$HERE/tests_group.sql"
+psql_ -d "$DB" -f "$HERE/tests_results.sql"

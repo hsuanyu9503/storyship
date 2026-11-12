@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 單一檔案升級（supabase/upgrade/upgrade.sql）的測試：
 #   1. 與 002／003／verify.sql 同步（由 build.sh 產生，沒有手動改動）
-#   2. 從已部署的 Phase 3（main 2bb50e4，複檢前版本）＋上課中資料升級：資料不變、15 項檢查全過、修正生效
+#   2. 從已部署的 Phase 3（main 2bb50e4，複檢前版本）＋上課中資料升級：資料不變、17 項檢查全過、修正生效
 #   3. 從 Phase 2（577e76c）升級：檢查全過
 #   4. 原子性：在交易中段注入錯誤 → 資料庫完全維持升級前狀態（沒有半套）
 #   5. 可重複執行；以 Supabase 式的預設權限（新資料表自動授權 anon）執行
@@ -42,7 +42,7 @@ digest() { psql_ -d "$1" -c "select md5(string_agg(t, '|' order by t)) from (
   select 'gs' || id || group_id || kind || data::text || is_complete || board_rev || created_at from public.group_snapshots union all
   select 'st' || session_id || phase || rev || editing_paused from public.session_state) x"; }
 verify_ok() { local bad; bad=$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|f$' || true)
-  [ "$bad" = "0" ] && [ "$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|t$')" = "15" ]; }
+  [ "$bad" = "0" ] && [ "$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|t$')" = "17" ]; }
 
 # 2. 已部署的 Phase 3（複檢前）＋上課中資料
 DB=story_friends_bundle_p3
@@ -72,7 +72,7 @@ psql_ -d $DB -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "升級失敗"
 [ "$(digest $DB)" = "$BEFORE" ] || fail "升級後既有資料改變"
 verify_ok $DB || { psql_ -d $DB -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
 psql_ -d $DB -c "select prosrc from pg_proc where proname = 'own_session'" | grep -q "for no key update" || fail "修正沒有生效"
-echo "ok - 從已部署的 Phase 3（2bb50e4）＋上課中資料升級：資料不變、15 項檢查全過、修正生效"
+echo "ok - 從已部署的 Phase 3（2bb50e4）＋上課中資料升級：資料不變、17 項檢查全過、修正生效"
 OUT=$(psql_ -d $DB -c "set role anon" -c "select public.group_update_category('$SID', '$TA', 'eeeeeeee-0000-4000-8000-000000000001', 'reason', 'x', null)" 2>&1 || true)
 echo "$OUT" | grep -q BAD_DATA || fail "升級後 null 版本號仍被接受：$OUT"
 [ "$(psql_ -d $DB -c "set role anon" -c "select public.student_group_board('$SID', '$TA')->'categories'->0->>'reason'" | tail -1)" = "升級前的理由" ] || fail "上課中資料無法讀取"
@@ -86,4 +86,43 @@ DB2=story_friends_bundle_p2
 mkdb $DB2 577e76c
 psql_ -d $DB2 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 Phase 2 升級失敗"
 verify_ok $DB2 || fail "從 Phase 2 升級後檢查未通過"
-echo "ok - 從 Phase 2（577e76c）以單一檔案升級：15 項檢查全過"
+echo "ok - 從 Phase 2（577e76c）以單一檔案升級：17 項檢查全過"
+
+# 5. 從已部署的 Phase 3（main 89299af）＋上課中資料升級到 Phase 4
+DB3=story_friends_bundle_p4
+mkdb $DB3 89299af
+psql_ -d $DB3 -c "insert into auth.users (id, email) values ('$T1', 't1@example.com'); insert into public.teachers values ('$T1', 't1@example.com');" >/dev/null
+SID=$(psql_ -d $DB3 -c "$TEACH" -c "select public.teacher_create_session('p4', 6)->>'session_id'" | tail -1)
+CODE=$(psql_ -d $DB3 -c "select join_code from public.sessions where id = '$SID'")
+st3() { psql_ -d $DB3 -c "$TEACH" -c "select public.teacher_set_stage('$SID', '$1', '$1', '{\"screen\":\"instruction\"}', (select rev from public.session_state where session_id = '$SID'), ${2:-false})->>'ok'" | tail -1; }
+psql_ -d $DB3 -c "set role anon" -c "select public.student_join('$CODE', '$TA', 1), public.student_join('$CODE', '$TB', 2)" >/dev/null
+st3 03 >/dev/null; st3 04 >/dev/null
+psql_ -d $DB3 -c "set role anon" -c "select public.group_add_category('$SID', '$TA', 'ffffffff-0000-4000-8000-000000000001')" \
+  -c "select public.group_update_category('$SID', '$TA', 'ffffffff-0000-4000-8000-000000000001', 'reason', 'Phase 3 時的理由', 1)" >/dev/null
+CARD1=$(psql_ -d $DB3 -c "select id from public.story_cards order by sort_order limit 1")
+psql_ -d $DB3 -c "set role anon" -c "select public.group_move_card('$SID', '$TA', '$CARD1', 'ffffffff-0000-4000-8000-000000000001', 0)" >/dev/null
+st3 05 true >/dev/null                                   # Phase 3 版本：教師結束共同分類
+BEFORE=$(digest $DB3)
+SNAPS=$(psql_ -d $DB3 -c "select md5(string_agg(id || data::text || created_at, '|' order by id)) from public.group_snapshots")
+psql_ -d $DB3 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 Phase 3 升級失敗"
+[ "$(digest $DB3)" = "$BEFORE" ] || fail "升級到 Phase 4 後既有資料改變"
+[ "$(psql_ -d $DB3 -c "select md5(string_agg(id || data::text || created_at, '|' order by id)) from public.group_snapshots")" = "$SNAPS" ] || fail "升級後快照改變"
+verify_ok $DB3 || { psql_ -d $DB3 -f "$ROOT/supabase/checks/verify.sql"; fail "升級到 Phase 4 後檢查未全數通過"; }
+echo "ok - 從已部署的 Phase 3（89299af）＋上課中資料升級：資料與快照不變、17 項檢查全過"
+S1=$(psql_ -d $DB3 -c "select gs.id from public.group_snapshots gs join public.groups g on g.id = gs.group_id where g.session_id = '$SID' and g.number = 1")
+R=$(psql_ -d $DB3 -c "$TEACH" -c "select public.teacher_publish_compare('$SID', jsonb_build_object('left', '$S1', 'reasons', jsonb_build_object('left', jsonb_build_array('ffffffff-0000-4000-8000-000000000001'))), (select rev from public.session_state where session_id = '$SID'))->>'ok'" | tail -1)
+[ "$R" = "true" ] || fail "升級後無法公開升級前保存的快照：$R"
+psql_ -d $DB3 -c "set role anon" -c "select public.projector_state('$SID', (select projector_key from public.sessions where id = '$SID'))::text" 2>/dev/null | grep -q "Phase 3 時的理由" \
+  || { PK=$(psql_ -d $DB3 -c "select projector_key from public.sessions where id = '$SID'"); psql_ -d $DB3 -c "set role anon" -c "select public.projector_state('$SID', '$PK')::text" | grep -q "Phase 3 時的理由" || fail "投影沒有顯示升級前快照的理由"; }
+echo "ok - 升級後可直接在 05 公開升級前保存的快照"
+psql_ -d $DB3 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "重複執行失敗"
+verify_ok $DB3 || fail "重複執行後檢查未通過"
+echo "ok - Phase 4 升級檔可重複執行（公開狀態保留：$(psql_ -d $DB3 -c "select (stage_ctl ? '05')::text from public.session_state where session_id = '$SID'")）"
+# 回復到 Phase 3 再升級
+for f in 002_rpc.sql 003_security.sql; do git -C "$ROOT" show "89299af:supabase/migrations/$f" > "$TMP/p3_$f"; chmod 644 "$TMP/p3_$f"; psql_ -d $DB3 -f "$TMP/p3_$f" >/dev/null 2>&1; done
+psql_ -d $DB3 -f "$ROOT/supabase/rollback/phase4_to_phase3.sql" >/dev/null 2>&1
+[ -z "$(psql_ -d $DB3 -c "select to_regprocedure('public.teacher_publish_compare(uuid,jsonb,bigint)')")" ] || fail "回復後 Phase 4 函式仍存在"
+[ "$(psql_ -d $DB3 -c "select md5(string_agg(id || data::text || created_at, '|' order by id)) from public.group_snapshots")" = "$SNAPS" ] || fail "回復後快照改變"
+psql_ -d $DB3 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "回復後再升級失敗"
+verify_ok $DB3 || fail "回復後再升級的檢查未通過"
+echo "ok - 可回復到 Phase 3（快照不變）並再次升級到 Phase 4"

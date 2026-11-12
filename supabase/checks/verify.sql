@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 故事找朋友｜升級後檢查（唯讀，可隨時執行；不修改任何資料）
--- 在 Supabase SQL Editor 執行後，每一列（15 列）的 ok 都應為 true。
+-- 在 Supabase SQL Editor 執行後，每一列（17 列）的 ok 都應為 true。
 -- =====================================================================
 with
 tables as (
@@ -65,4 +65,17 @@ select '14. 個人分類結束標記欄位存在', exists (select 1 from informa
         where table_schema = 'public' and table_name = 'session_state' and column_name = 'personal_closed_at')
 union all
 select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
-        where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev');
+        where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev')
+union all
+select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果）',
+       (select count(*) from information_schema.columns where table_schema = 'public'
+          and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
+            or (table_name = 'group_category_tombstones' and column_name = 'result'))) = 3
+union all
+select '17. Phase 4 函式存在且只開放給教師',
+       to_regprocedure('public.teacher_publish_compare(uuid,jsonb,bigint)') is not null
+       and to_regprocedure('public.teacher_publish_match(uuid,jsonb,bigint)') is not null
+       and has_function_privilege('authenticated', 'public.teacher_preview_compare(uuid,jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.teacher_preview_compare(uuid,jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.teacher_publish_match(uuid,jsonb,bigint)', 'execute')
+       and not has_function_privilege('anon', 'app.compare_build(uuid,jsonb)', 'execute');

@@ -84,7 +84,62 @@ const SCREENS = {
   instruction: (p) => h('div.st-center', h('h1.st-title', p.title), p.text ? h('p.st-lead', p.text) : null,
     p.items?.length ? h('ol.st-steps', p.items.map((x) => h('li', x))) : null),
 
-  placeholder: (p) => h('div.st-center', h('h1.st-title', p.title), h('p.st-sub.muted', '（此環節的展示功能將於 Phase 4 完成）')),
+  // 05／07 尚未公開任何內容時的等待畫面（不含任何成果資料）
+  placeholder: (p) => h('div.st-center', h('h1.st-title', p.title), h('p.st-sub.muted', p.sub || '請看老師準備要展示的內容')),
+
+  // 05：雙組比較。所有文字都是伺服器白名單產生的公開資料；未揭露的理由只有狀態、沒有內容。
+  compare: (p) => {
+    const sides = p.sides || [];
+    if (!sides.length) {
+      return h('div.st-center', h('h1.st-title', p.title || '分類成果大公開'), h('p.st-sub.muted', '老師正在準備要展示的成果'));
+    }
+    return h('div.st-compare' + (sides.length === 1 ? '.single' : ''),
+      h('div.st-cmp-head', h('h1.st-cmp-title', p.title || '分類成果大公開'),
+        p.story ? h('span.st-cmp-track', '追蹤故事：', h('b', p.story.title)) : null),
+      h('div.st-cmp-body', sides.map((sd) => h('section.st-side',
+        h('div.st-side-head',
+          h('span.st-side-group', sd.group),
+          h('span.st-side-kind' + (sd.kind === 'submitted' ? '' : '.locked'), sd.kind === 'submitted' ? '小組正式提交' : '教師結束時保存（未正式提交）'),
+          sd.pages > 1 && !sd.focus ? h('span.st-side-page', `第 ${sd.page + 1}／${sd.pages} 頁`) : null),
+        sd.track ? h('div.st-side-track' + (sd.track.unplaced ? '.none' : ''),
+          `「${p.story?.title || ''}」`, sd.track.unplaced ? '尚未分類' : h('span', '在「', h('b', sd.track.where), '」')) : null,
+        sd.categories.length
+          ? h('div.st-cats' + (sd.focus ? '.focus' : ''), sd.categories.map((c) => h('div.st-cat' + (c.cards.some((x) => x.tracked) ? '.has-track' : ''),
+              h('div.st-cat-name', c.label, c.unnamed ? h('span.st-unnamed', '（未命名）') : null),
+              h('div.st-cat-cards', c.cards.map((x) => h('span.st-chip-card' + (x.tracked ? '.tracked' : ''), x.title))),
+              c.reason_state === 'shown' ? h('div.st-cat-reason', h('span.st-reason-label', '共同特色'), c.reason)
+                : c.reason_state === 'empty' ? h('div.st-cat-reason.empty', '（這一類沒有寫共同特色）')
+                : h('div.st-cat-reason.hidden', '共同特色：等一下揭曉')))
+          )
+          : h('p.st-sub.muted', '這一組沒有已分類的故事'),
+        sd.unplaced_count ? h('div.st-side-unplaced', `尚未分類的故事：${sd.unplaced_count} 張`) : null))));
+  },
+
+  // 07：原始分類 ↔ 小說類型要素對照
+  match: (p) => {
+    const c = p.category; const g = p.genre;
+    return h('div.st-match',
+      h('div.st-match-head', h('h1.st-cmp-title', p.title || '小小故事分類師')),
+      h('div.st-match-body',
+        h('section.st-match-left',
+          p.group ? h('div.st-side-head', h('span.st-side-group', p.group.group),
+            h('span.st-side-kind' + (p.group.kind === 'submitted' ? '' : '.locked'), p.group.kind === 'submitted' ? '小組正式提交' : '教師結束時保存（未正式提交）')) : null,
+          c ? h('div.st-match-cat',
+                h('div.st-cat-name.big', c.label, c.unnamed ? h('span.st-unnamed', '（未命名）') : null),
+                h('div.st-match-cards', c.cards.map((x) => h('div.st-match-card', media(x.image_url, x.title, 'st-match-img'), h('span', x.title)))),
+                c.reason_state === 'shown' ? h('div.st-cat-reason', h('span.st-reason-label', '共同特色'), c.reason)
+                  : c.reason_state === 'empty' ? h('div.st-cat-reason.empty', '（這一類沒有寫共同特色）') : null)
+            : h('p.st-sub.muted', '老師正在選擇要對照的分類')),
+        h('section.st-match-right',
+          g ? h('div.st-match-genre',
+                media(g.visual_url, g.name, 'st-match-visual'),
+                h('div.st-match-gname', g.name),
+                h('div.st-match-els', g.elements.map((e) => e.revealed
+                  ? h('div.st-match-el' + (e.highlight ? '.hl' : ''), h('span.icon', e.icon || '◆'), h('span', e.label), e.highlight ? h('span.st-hl-tag', '相似') : null)
+                  : h('div.st-match-el.hidden', h('span.icon', '？'), h('span', '核心要素')))))
+            : h('div.st-match-genre.empty', h('div.st-mystery', '？'), h('p.st-sub', '這些故事和哪一種小說比較接近？')))),
+      p.scaffold ? h('div.st-scaffold', TEXT.scaffold) : null);
+  },
 
   genre: (p) => {
     if (p.view === 'recap') {
