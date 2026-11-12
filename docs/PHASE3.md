@@ -1,5 +1,8 @@
 # Phase 3 交付說明｜04 故事找朋友：小組共作
 
+> **更新**：外部獨立複檢指出的 5 項 P1／P2 問題與其他項目已全部重現並修正，見 [`REVIEW_PHASE3.md`](REVIEW_PHASE3.md)。
+> 該文件中的測試數字與鎖定協定以修正後為準；升級請使用 `supabase/upgrade/upgrade.sql`。
+
 本文件對應 Phase 3 開發指令第十九節「交付要求」。
 
 ## 0. 開發基準與檢查結果
@@ -31,7 +34,7 @@
 | 檔案 | 內容 |
 |---|---|
 | `js/student/group.js` | 04 學生端控制器：操作佇列、樂觀顯示、版本校正、操作鎖與續約、離線處理、提交 |
-| `supabase/checks/verify.sql` | 升級後檢查（唯讀，13 項） |
+| `supabase/checks/verify.sql` | 升級後檢查（唯讀，14 項） |
 | `supabase/rollback/phase3_to_phase2.sql` | 需要退回 Phase 2 時使用 |
 | `tests/db/tests_group.sql` | Phase 3 資料庫測試（62 項） |
 | `tests/db/race_group.sh` | 兩個真實連線的競態測試（6 種情境） |
@@ -63,7 +66,7 @@ Phase 2 留下的個人草稿、個人快照、小組分類、提交快照全部
 |---|---|---|
 | 1 | `supabase/migrations/002_rpc.sql` | 新資料表（已存在則略過）＋所有函式。執行時出現 `NOTICE: function public.group_add_category(uuid,text) does not exist, skipping` 是正常的（只在重複執行時出現） |
 | 2 | `supabase/migrations/003_security.sql` | 權限。**002 之後一定要執行**，否則學生無法呼叫新版函式 |
-| 3 | `supabase/checks/verify.sql` | 升級後檢查：13 列的 `ok` 都應為 `true` |
+| 3 | `supabase/checks/verify.sql` | 升級後檢查：每一列的 `ok` 都應為 `true` |
 
 不需要執行 seed。**全新安裝**：`001 → 002 → 003 → seed`，再執行 `verify.sql`。
 

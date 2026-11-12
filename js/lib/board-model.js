@@ -56,8 +56,8 @@ function newId(existing) {
 }
 
 // makeId：小組分類傳入 UUID 產生器（伺服器以此作為分類 id 與操作識別碼）；個人分類使用短 id
-export function addCategory(data, makeId = null) {
-  if (data.categories.length >= MAX_CATEGORIES) return { data, id: null };
+export function addCategory(data, makeId = null, max = MAX_CATEGORIES) {
+  if (data.categories.length >= max) return { data, id: null };
   const id = makeId ? makeId() : newId(new Set(data.categories.map((c) => c.id)));
   const no = data.categories.reduce((m, c) => Math.max(m, c.no), 0) + 1;
   return { data: { ...data, categories: [...data.categories, { id, no, name: '' }] }, id };

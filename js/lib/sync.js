@@ -19,7 +19,9 @@ export function createSync({ client, topic, load, onData, onStatus,
 
   async function refresh() {
     if (stopped) return;
-    if (inflight) { pending = true; return inflight; }
+    // 讀取進行中又被要求重新讀取（例如剛寫入完成）：回傳「下一次」讀取的結果，
+    // 而不是進行中那次（它可能在寫入之前就已送出，資料是舊的）
+    if (inflight) { pending = true; return inflight.then(() => inflight); }
     inflight = (async () => {
       try {
         const data = await load();

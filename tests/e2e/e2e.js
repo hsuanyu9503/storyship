@@ -558,6 +558,101 @@ async function inViewport(page, sel) {
     await gTapMove(s0, JSON.parse(await gState(s0)).cats[1].cards.slice(-1)[0], 'unplaced');
     await converge([s0, s1, s3], (x) => x.cats[1].cards.length === beforeR);
 
+    // ---------- 複檢 F1／F5／F2：以攔截回應製造交錯（記錄實際送出的請求） ----------
+    const deferred = () => { let res; const p = new Promise((r) => { res = r; }); return { p, res }; };
+    const body = (req) => { try { return JSON.parse(req.postData() || '{}'); } catch { return {}; } };
+    const placeOf = (st, title) => { const i = st.cats.findIndex((c) => c.cards.includes(title)); return i; };
+
+    // F1：A 的移動已寫入、但回應遺失；B 再把同一張卡移到別處；A 重送必須沿用原本的版本號 → 不得覆蓋 B
+    if (!process.env.SKIP_F1) {
+      const T = JSON.parse(await gState(s0)).cats[0].cards[0];
+      const tCard = (await s0.evaluate((t) => [...document.querySelectorAll('.gw-main .sc')].find((e) => e.querySelector('.sc-title').textContent === t)?.dataset.card, T));
+      const sent = []; const bDone = deferred(); let n = 0;
+      await s0.route('**/rest/v1/rpc/group_move_card', async (route) => {
+        const b = body(route.request());
+        if (b.p_card !== tCard) return route.continue();
+        sent.push(b.p_expected_rev); n++;
+        if (n === 1) { await route.fetch(); return route.abort('failed'); }   // 伺服器已寫入，回應遺失
+        if (!bDone.done) return route.abort('failed');                        // B 完成前的重送都失敗（A 持續重試）
+        return route.continue();
+      });
+      await gTapMove(s0, T, gCat(s0, 1));
+      await s1.waitForFunction((t) => document.querySelectorAll('.gw-main .bd-cat')[1]?.textContent.includes(t), T, { timeout: 12000 });
+      await s1.waitForSelector(`${G} .sc:has(.sc-title:text-is("${T}")) .sc-grip:not(.sc-grip-locked)`, { timeout: 12000 });
+      await gTapMove(s1, T, gCat(s1, 2));
+      await s1.waitForFunction((t) => document.querySelectorAll('.gw-main .bd-cat')[2]?.textContent.includes(t), T, { timeout: 12000 });
+      // 確認 A 已經讀到 B 的結果（A 的伺服器資料中，該卡版本已前進），之後才讓 A 的重送成功
+      await s0.waitForTimeout(3500);
+      bDone.done = true;
+      await s0.waitForFunction(() => !document.querySelector('.gw-main .bd-status')?.textContent, null, { timeout: 25000 });
+      await s0.waitForTimeout(2500);
+      const fin = JSON.parse(await converge([s0, s1, s3], () => true, 20000));
+      await s0.unroute('**/rest/v1/rpc/group_move_card');
+      ok(sent.length >= 2 && sent.every((v) => v === sent[0]), `複檢 F1：重送沿用第一次的版本號（共 ${sent.length} 次，版本 ${[...new Set(sent)].join('、')}）`);
+      ok(sent.length <= 8, `複檢 F1：寫入持續失敗時以退避重試，沒有重送風暴（${sent.length} 次）`);
+      ok(placeOf(fin, T) === 2, '複檢 F1：遺失回應後的重送沒有覆蓋組員之後的移動（最後是 B 的結果）');
+    }
+
+    // F5：A 的成功回應延遲，期間 B 又移動同一張卡、A 也讀到新狀態；舊回應到達後畫面不得倒退
+    if (!process.env.SKIP_F5) {
+      const T = JSON.parse(await gState(s0)).cats[2].cards[0];
+      const tCard = (await s0.evaluate((t) => [...document.querySelectorAll('.gw-main .sc')].find((e) => e.querySelector('.sc-title').textContent === t)?.dataset.card, T));
+      const release = deferred(); const committed = deferred();
+      await s0.route('**/rest/v1/rpc/group_move_card', async (route) => {
+        if (body(route.request()).p_card !== tCard) return route.continue();
+        const resp = await route.fetch(); committed.res();
+        await release.p; return route.fulfill({ response: resp });
+      });
+      await gTapMove(s0, T, gCat(s0, 1));
+      await committed.p;
+      await s1.waitForFunction((t) => document.querySelectorAll('.gw-main .bd-cat')[1]?.textContent.includes(t), T, { timeout: 12000 });
+      await s1.waitForSelector(`${G} .sc:has(.sc-title:text-is("${T}")) .sc-grip:not(.sc-grip-locked)`, { timeout: 12000 });
+      await gTapMove(s1, T, gCat(s1, 0));
+      await converge([s1, s3], (x) => placeOf(x, T) === 0);
+      await s0.waitForTimeout(2500);          // A 的輪詢讀到 B 的結果（A 的操作仍在等待回應）
+      // 舊回應放行後，延遲 A 接下來的讀取，才能觀察舊回應本身是否讓畫面倒退
+      await s0.route('**/rest/v1/rpc/student_group_board', async (route) => { await new Promise((r) => setTimeout(r, 2500)); return route.continue().catch(() => {}); });
+      release.res();
+      await s0.waitForTimeout(600);           // 舊回應已處理、延遲的讀取尚未回來
+      const st5 = JSON.parse(await gState(s0));
+      await s0.unroute('**/rest/v1/rpc/group_move_card');
+      await s0.unroute('**/rest/v1/rpc/student_group_board', { behavior: 'wait' });
+      ok(placeOf(st5, T) === 0, '複檢 F5：延遲到達的舊回應沒有讓畫面倒退回舊位置');
+      const f5 = JSON.parse(await converge([s0, s1, s3]));
+      ok(placeOf(f5, T) === 0, '複檢 F5：最後全組一致為較新的結果');
+    }
+
+    // F2：A 以為持有欄位鎖（攔截為假成功），B 修改同一名稱；A 的舊文字被拒絕後，不得在沒有新輸入時再次送出
+    if (!process.env.SKIP_F2) {
+      const aUpdates = []; const bDone = deferred();
+      await s0.route('**/rest/v1/rpc/group_lock', (route) => {
+        const b = body(route.request());
+        if (String(b.p_target || '').startsWith('name:')) return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"expires_at":"2099-01-01T00:00:00Z"}' });
+        return route.continue();
+      });
+      await s0.route('**/rest/v1/rpc/group_update_category', async (route) => {
+        const b = body(route.request());
+        aUpdates.push(b.p_value);
+        if (b.p_value === '甲的名稱') await bDone.p;   // 等 B 改完才送到伺服器 → 得到 STALE
+        return route.continue();
+      });
+      await gCat(s0, 2).locator('.bd-name').tap();
+      await s0.keyboard.insertText('甲的名稱');
+      await s0.waitForTimeout(1000);                   // 送出（被攔住）
+      await gCat(s1, 2).locator('.bd-name').tap();
+      await s1.keyboard.insertText('乙的名稱');
+      await gCat(s1, 2).locator('.bd-name').blur();
+      await converge([s1, s3], (x) => x.cats[2].name === '乙的名稱');
+      bDone.res();
+      await waitText(s0, '你剛才的文字：「甲的名稱」');
+      await s0.waitForTimeout(3000);                   // 觀察是否有自動重送
+      const after = JSON.parse(await converge([s0, s1, s3]));
+      await s0.unroute('**/rest/v1/rpc/group_update_category');
+      await s0.unroute('**/rest/v1/rpc/group_lock');
+      ok(aUpdates.filter((v) => v === '甲的名稱').length === 1, `複檢 F2：衝突後沒有自動重送被拒絕的舊文字（送出 ${aUpdates.length} 次）`);
+      ok(after.cats[2].name === '乙的名稱', '複檢 F2：組員的新名稱保留，並提示學生自己剛才輸入的文字');
+    }
+
     // 刪除分類：他人正在輸入該分類時不能刪除；刪除後故事回到未分類
     await gCat(s1, 2).locator('.bd-name').tap();
     await s0.waitForFunction(() => document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-del')?.disabled, null, { timeout: 12000 });
@@ -566,7 +661,7 @@ async function inViewport(page, sel) {
     await s0.waitForFunction(() => !document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-del')?.disabled, null, { timeout: 12000 });
     const before3 = JSON.parse(await gState(s0)).cats[2].cards;
     await gCat(s0, 2).locator('.bd-del').click();
-    await waitText(s0, '刪除「分類 3」？');
+    await waitText(s0, '刪除「');
     await s0.click('dialog button:has-text("刪除分類")');
     cs = JSON.parse(await converge([s0, s1, s3], (x) => x.cats.length === 2));
     ok(cs.cats.length === 2 && before3.every((t) => cs.unplaced.includes(t)), '04：刪除分類後其中故事回到未分類（全組同步）');

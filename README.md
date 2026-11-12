@@ -33,6 +33,7 @@
 * [`docs/TESTING.md`](docs/TESTING.md)：自動化測試、驗證結果、部署後手動驗收步驟
 * [`docs/PHASE2.md`](docs/PHASE2.md)：Phase 2 交付說明（升級 SQL、測試結果、實機驗收清單、Phase 3 沿用說明）
 * [`docs/PHASE3.md`](docs/PHASE3.md)：Phase 3 交付說明（升級 SQL、同步與衝突設計、多人測試結果、實機驗收清單、Phase 4 資料結構）
+* [`docs/REVIEW_PHASE3.md`](docs/REVIEW_PHASE3.md)：Phase 3 獨立複檢的回應與修正
 
 ## 目錄
 
@@ -49,6 +50,7 @@ supabase/seed/          佔位教學素材
 supabase/setup/         新增教師帳號
 supabase/rollback/      退回前一版時使用
 supabase/checks/        升級後檢查（verify.sql）
+supabase/upgrade/       單一交易升級檔（upgrade.sql，由 build.sh 產生）
 tests/unit/ tests/db/ tests/e2e/
 ```
 

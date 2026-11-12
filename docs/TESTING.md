@@ -4,12 +4,12 @@
 
 | 指令 | 內容 | 需要 |
 |---|---|---|
-| `npm run test:unit` | 投影內容產生器、分類資料模型（16 項） | Node.js 20+ |
-| `npm run test:db` | 資料庫行為：權限、加入、狀態機、個人分類、小組共作（冪等、衝突、提交、重新開放、結束保存、隔離）、保留清除（226 項） | PostgreSQL 15+ 與 `psql` |
-| `npm run test:race` | 兩個真實連線的競態：個人快照 2 情境＋小組 6 情境（教師結束／暫停 vs. 學生操作、同時提交、移入 vs. 刪除、同時新增） | PostgreSQL |
-| `npm run test:upgrade` | Phase 1 → 2、Phase 2 → 3 升級（含上課中資料）、升級後檢查、回復、再升級，資料不變 | PostgreSQL＋git |
+| `npm run test:unit` | 投影內容產生器、分類資料模型（17 項） | Node.js 20+ |
+| `npm run test:db` | 資料庫行為：權限、加入、狀態機、個人分類、小組共作（冪等、衝突、提交、重新開放、結束保存、隔離）、保留清除、null 版本號（235 項） | PostgreSQL 15+ 與 `psql` |
+| `npm run test:race` | 真實連線的競態：個人快照 2 情境＋小組 9 情境（教師結束／暫停 vs. 學生操作、同時提交、移入 vs. 刪除、同時新增、提交 vs. 教師暫停的死結、換組／移出 vs. 進行中的編輯） | PostgreSQL |
+| `npm run test:upgrade` | Phase 1 → 2、Phase 2 → 3 升級（含上課中資料）、升級空窗、單一交易升級檔（原子性）、升級後檢查、回復、再升級，資料不變 | PostgreSQL＋git |
 | `npm run test:concurrency` | 12 個連線、六組同時移動卡片與改名稱 1,800 次，驗證沒有遺失更新；六組同時提交 | PostgreSQL＋`pgbench` |
-| `tests/e2e`（見下） | 瀏覽器端對端：教師、投影、五位獨立學生（第 1 組四位含補加入者）完整走過 00→99，含 03 個人分類與 04 小組共作全流程（114 項） | 上述＋Playwright |
+| `tests/e2e`（見下） | 瀏覽器端對端：教師、投影、五位獨立學生（第 1 組四位含補加入者）完整走過 00→99，含 03 個人分類與 04 小組共作全流程，以及以攔截回應製造的交錯測試（121 項） | 上述＋Playwright |
 
 ### 資料庫測試如何模擬 Supabase
 
@@ -34,7 +34,7 @@ npm test
 
 ## 2. Phase 1 驗證結果（2026-11-12）
 
-> Phase 2、Phase 3 的測試結果與驗收清單見 [`PHASE2.md`](PHASE2.md)、[`PHASE3.md`](PHASE3.md) 第六、七節。下表為 Phase 1 當時的狀態，Phase 2 後已更新的項目標示於表後。
+> Phase 2、Phase 3 的測試結果與驗收清單見 [`PHASE2.md`](PHASE2.md)、[`PHASE3.md`](PHASE3.md) 第六、七節；Phase 3 獨立複檢的回應與修正見 [`REVIEW_PHASE3.md`](REVIEW_PHASE3.md)。下表為 Phase 1 當時的狀態，Phase 2 後已更新的項目標示於表後。
 
 | 規格第十六節測試案例 | 狀態 | 驗證方式 |
 |---|---|---|

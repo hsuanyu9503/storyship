@@ -6,6 +6,10 @@
 //     從不把整份本機資料覆蓋到伺服器；伺服器以各項目的版本號判斷是否過期。
 //   * 本機操作依序送出（一次一個），操作失敗時直接丟棄該操作、重新讀取伺服器資料，畫面自動回到正確狀態。
 //   * 讀取到的小組資料若版本（board_rev）比目前已知的舊，一律忽略：較晚到的舊回應不會讓畫面回溯。
+//   * 每個操作在「使用者動作的當下」記下基準版本（expected_rev）與內容，重送時沿用同一份請求，
+//     絕不改用伺服器最新版本重新送出舊意圖（否則會在不知情下覆蓋組員的新成果；複檢 F1）。
+//     同一裝置對同一目標的連續操作，後一個的基準版本＝前一個經伺服器確認後的版本；前一個被拒絕時後一個一併取消。
+//   * 伺服器回應只會讓資料「往前」：單項版本比目前舊的回應不覆寫（複檢 F5）；讀取結果以 board_rev＋伺服器時間排序。
 //   * 重送安全：新增分類帶前端產生的 id（重送不會產生第二個、也不會重建已刪除的分類）；
 //     移動／改字若伺服器已是相同結果，回傳成功但不重複寫入；刪除已不存在的分類視為完成。
 //   * 即時通知（Realtime）只用來加速；收不到時每 2 秒輪詢一次。
@@ -24,6 +28,7 @@ import { createBoardView } from '../lib/board-view.js';
 const TEXT_DEBOUNCE = 800;
 const LOCK_RENEW_MS = 5000;
 const SLOW_MS = 1500;
+const GROUP_MAX_CATEGORIES = 20;   // 與伺服器 group_add_category 的上限一致
 
 function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -49,6 +54,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   let sending = false;
   let offline = false;
   let retryTimer = null;
+  let retryDelay = 2000;    // 寫入的網路錯誤：指數退避（2 → 4 → 8 → 15 秒），成功後重設
   let slowTimer = null;
   let slow = false;
   const textTimers = new Map();
@@ -95,7 +101,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
         panelBody.append(h('p.gw-empty', '尚無個人分類紀錄。'));
       }
       view = createBoardView({ cards, title: `${board.group_name}｜共同分類`, categoriesTitle: '小組分類',
-        reasons: true, confirmEveryDelete: true, makeId: uuid, onChange, onGrab, onRelease, onFieldFocus, onFieldBlur });
+        reasons: true, confirmEveryDelete: true, makeId: uuid, maxCategories: GROUP_MAX_CATEGORIES, onChange, onGrab, onRelease, onFieldFocus, onFieldBlur });
       main.append(view.el);
       el.className = 'gw';
       el.replaceChildren(panel, backdrop, main);
@@ -111,7 +117,8 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
         },
         onData: (b, err) => {
           if (err) { if (['NOT_AVAILABLE', 'REMOVED', 'NOT_JOINED'].includes(err.code)) onPing?.(); return; }
-          if (offline) { offline = false; retryNow(); }
+          // 讀取恢復：若已有排定的重送就等它（不立即插隊，避免讀取成功、寫入失敗時形成重送風暴）
+          if (offline) { offline = false; if (!retryTimer) retryNow(); }
           adopt(b);
         },
       });
@@ -124,11 +131,13 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
 
   // ---------- 伺服器資料 ----------
   function adopt(b, first = false) {
-    if (!first && server && b.board_rev < server.board_rev) return;   // 較舊的回應：忽略（畫面不回溯）
+    // 較舊的回應：忽略（畫面不回溯）。board_rev 相同時以伺服器讀取時間判斷（鎖清單不會因舊回應而「復活」）
+    if (!first && server && (b.board_rev < server.board_rev
+        || (b.board_rev === server.board_rev && (b.read_at ?? 0) < (server.read_at ?? 0)))) return;
     const cats = new Map(b.categories.map((c) => [c.id, c]));
     const place = new Map(b.placements.map((p) => [p.card_id, { cat: p.category_id, rev: p.rev }]));
-    server = { board_rev: b.board_rev, status: b.status, can_edit: b.can_edit, paused: b.paused, phase: b.phase,
-               cats, place, locks: b.locks || [], problems: b.problems };
+    server = { board_rev: b.board_rev, read_at: b.read_at ?? 0, status: b.status, can_edit: b.can_edit, paused: b.paused,
+               phase: b.phase, cats, place, locks: b.locks || [], problems: b.problems };
     // 伺服器已確認的文字：清除對應的本機暫存（欄位仍在輸入中的除外）
     for (const [key, v] of texts) {
       const [field, id] = key.split(':');
@@ -193,11 +202,11 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
       queue.push({ type: 'add', id: info.categoryId });
       if (info.cardId) {
         if (held === 'card:' + info.cardId) clearInterval(renewTimer);
-        queue.push({ type: 'move', cardId: info.cardId, to: info.categoryId });
+        enqueueVersioned({ type: 'move', key: 'card:' + info.cardId, cardId: info.cardId, to: info.categoryId });
       }
     } else if (kind === 'move') {
       if (held === 'card:' + info.cardId) clearInterval(renewTimer);   // 移動送出後不再續約
-      queue.push({ type: 'move', cardId: info.cardId, to: info.categoryId });
+      enqueueVersioned({ type: 'move', key: 'card:' + info.cardId, cardId: info.cardId, to: info.categoryId });
     } else if (kind === 'delete') {
       queue.push({ type: 'delete', id: info.categoryId });
     } else if (kind === 'rename' || kind === 'reason' || kind === 'rename-commit' || kind === 'reason-commit') {
@@ -217,13 +226,31 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     pump();
   }
 
+  // 目前已確認的版本（移動：該卡；文字：該欄位）
+  function confirmedRev(op) {
+    if (op.type === 'move') return server.place.get(op.cardId)?.rev ?? 0;
+    const c = server.cats.get(op.id);
+    return c ? (op.field === 'name' ? c.name_rev : c.reason_rev) : null;
+  }
+
+  // 加入需要版本號的操作：基準版本在此刻決定（＝使用者動作時看到的版本），之後不再改變
+  function enqueueVersioned(op) {
+    // 文字欄位所屬的分類若還在等待新增確認，接在「新增」之後（確認後版本從 1 開始）
+    const prev = [...queue].reverse().find((q) => (q.key === op.key && (q.type === 'move' || q.type === 'text'))
+      || (op.type === 'text' && q.type === 'add' && q.id === op.id));
+    if (prev) op.after = prev;          // 接在同一目標尚未確認的操作之後：等它確認後沿用其結果版本
+    else op.base = confirmedRev(op);
+    queue.push(op);
+  }
+
   function queueText(key) {
     if (!texts.has(key)) return;
     const [field, id] = key.split(':');
     const cur = server?.cats.get(id);
     // 與伺服器相同就不送
     if (cur && (cur[field] ?? '') === texts.get(key) && !queue.some((q) => q.key === key)) return;
-    if (!queue.some((q) => q.type === 'text' && q.key === key && !q.sent)) queue.push({ type: 'text', key, field, id });
+    // 尚未送出的同一欄位操作：合併（送出時才取最新文字）；已送出的：新增一個接續的操作
+    if (!queue.some((q) => q.type === 'text' && q.key === key && !q.sent)) enqueueVersioned({ type: 'text', key, field, id });
     pump();
   }
 
@@ -232,8 +259,9 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   }
 
   function dropPendingEdits() {
-    // 不能編輯（暫停、提交、鎖定）時，尚未送出的操作一律丟棄；畫面回到伺服器資料
-    if (queue.length && !sending) queue.length = 0;
+    // 不能編輯（暫停、提交、鎖定）時，尚未送出的操作一律丟棄；畫面回到伺服器資料。
+    // 正在送出的那一個保留到回應為止（結果由伺服器決定），其餘立即取消，不會在恢復後自動補送。
+    queue.splice(sending ? 1 : 0);
     for (const t of textTimers.values()) clearTimeout(t);
     textTimers.clear();
     if (!view?.editingField()) texts.clear();
@@ -251,6 +279,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     let r = null;
     try {
       r = await send(op);
+      retryDelay = 2000;
       queue.shift();
       settle(op, r);
     } catch (e) {
@@ -259,7 +288,8 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
         offline = true;
         op.sent = false;
         clearTimeout(retryTimer);
-        retryTimer = setTimeout(retryNow, 3000);
+        retryTimer = setTimeout(retryNow, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 15000);
         sending = false;
         clearTimeout(slowTimer); slow = false;
         paint(true);
@@ -277,6 +307,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     }
     sending = false;
     if (r?.board_rev && server) server.board_rev = Math.max(server.board_rev, r.board_rev);
+    if (!serverEditable()) queue.length = 0;   // 送出期間被暫停／提交：其餘操作取消
     render();
     gsync?.refresh();
     if (queue.length) pump();
@@ -284,7 +315,6 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
 
   function retryNow() {
     clearTimeout(retryTimer); retryTimer = null;
-    gsync?.refresh();
     pump();
   }
 
@@ -298,17 +328,19 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     const base = { p_session: sessionId, p_token: token };
     if (op.type === 'add') return rpc(client, 'group_add_category', { ...base, p_category: op.id });
     if (op.type === 'move') {
-      return rpc(client, 'group_move_card', { ...base, p_card: op.cardId, p_category: op.to,
-        p_expected_rev: server.place.get(op.cardId)?.rev ?? 0 });
+      // 重送時沿用第一次的基準版本（不改用伺服器最新版本）
+      return rpc(client, 'group_move_card', { ...base, p_card: op.cardId, p_category: op.to, p_expected_rev: op.base });
     }
     if (op.type === 'delete') return rpc(client, 'group_delete_category', { ...base, p_category: op.id });
     if (op.type === 'text') {
       const cur = server.cats.get(op.id);
-      if (!cur) return { ok: false, code: 'NOT_FOUND' };
-      op.value = texts.get(op.key) ?? (cur[op.field] ?? '');
+      if (op.base == null) return { ok: false, code: 'NOT_FOUND' };
+      // 內容在第一次送出時固定；重送是同一個請求
+      if (op.value === undefined) op.value = texts.get(op.key) ?? (cur?.[op.field] ?? '');
       return rpc(client, 'group_update_category', { ...base, p_category: op.id, p_field: op.field, p_value: op.value,
-        p_expected_rev: op.field === 'name' ? cur.name_rev : cur.reason_rev });
+        p_expected_rev: op.base });
     }
+    if (op.type === 'release') await lockInflight;   // 先等取得操作權的請求完成，避免「釋放」比「取得」先到（幽靈鎖）
     if (op.type === 'release') {
       return rpc(client, 'group_lock', { ...base, p_target: op.target, p_release: true }).catch((e) => {
         if (e.code === 'NETWORK') throw e; return { ok: true };
@@ -318,7 +350,18 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   }
 
   // 依伺服器回應更新已確認資料；失敗的操作直接放棄（畫面會回到伺服器資料）
+  // 同一目標接續的操作：前一個確認後沿用其版本；前一個失敗則一併取消（它們建立在被拒絕的狀態上）
+  function resolveChain(op, ok, rev) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+      const q = queue[i];
+      if (q.after !== op) continue;
+      if (ok) { q.base = rev; delete q.after; } else { queue.splice(i, 1); resolveChain(q, false); }
+    }
+  }
+
   function settle(op, r) {
+    if (op.type === 'move' || op.type === 'text') resolveChain(op, Boolean(r.ok), r.rev);
+    if (op.type === 'add') resolveChain(op, Boolean(r.ok), 1);   // 新分類的名稱與理由版本從 1 開始
     if (op.type === 'add') {
       if (r.ok) {
         if (!server.cats.has(op.id)) server.cats.set(op.id, { id: op.id, label_no: r.label_no, name: '', reason: '', name_rev: 1, reason_rev: 1 });
@@ -332,9 +375,11 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
         holdRelease();
         if (!r.ok || r.unchanged) queue.push({ type: 'release', target: 'card:' + op.cardId });
       }
-      if (r.ok) server.place.set(op.cardId, { cat: op.to, rev: r.rev });
+      // 只讓版本往前：已讀到更新的位置時，不被這個較舊的回應覆寫（複檢 F5）
+      const known = server.place.get(op.cardId)?.rev ?? 0;
+      if (r.ok) { if (r.rev >= known) server.place.set(op.cardId, { cat: r.category_id !== undefined ? r.category_id : op.to, rev: r.rev }); }
       else if (r.code === 'STALE') {
-        server.place.set(op.cardId, { cat: r.category_id, rev: r.rev });
+        if (r.rev >= known) server.place.set(op.cardId, { cat: r.category_id, rev: r.rev });
         flash(`組員剛剛移動了「${cardTitle(op.cardId)}」，已更新為最新位置。`);
       } else if (r.code === 'LOCKED') flash(`組員正在移動「${cardTitle(op.cardId)}」，請稍後再試。`);
       else if (r.code === 'NOT_FOUND') flash('這個分類已被組員刪除，故事沒有移動。');
@@ -346,17 +391,23 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
       } else if (r.code === 'LOCKED') flash(`組員正在編輯「${catName(op.id)}」，暫時不能刪除。`);
     } else if (op.type === 'text') {
       const cur = server.cats.get(op.id);
+      const revKey = op.field + '_rev';
       if (r.ok) {
-        if (cur) { cur[op.field] = op.value; cur[op.field + '_rev'] = r.rev; }
+        // 只讓版本往前（複檢 F5）；unchanged＝伺服器早已是這個值
+        if (cur && r.rev >= (cur[revKey] ?? 0) && !r.unchanged) { cur[op.field] = op.value; cur[revKey] = r.rev; }
         if (texts.get(op.key) === op.value && !textTimers.has(op.key) && !isFocused(op.key)) texts.delete(op.key);
       } else {
-        const mine = texts.get(op.key);
+        const mine = texts.get(op.key) ?? op.value;
+        // 放棄這個欄位所有尚未送出的本機文字（不再自動重送；複檢 F2）
         texts.delete(op.key);
-        if (r.code === 'STALE' && cur) { cur[op.field] = r.value; cur[op.field + '_rev'] = r.rev; }
+        clearTimeout(textTimers.get(op.key)); textTimers.delete(op.key);
+        for (let i = queue.length - 1; i >= 0; i--) if (queue[i].type === 'text' && queue[i].key === op.key) queue.splice(i, 1);
+        if (r.code === 'STALE' && cur && r.rev >= (cur[revKey] ?? 0)) { cur[op.field] = r.value; cur[revKey] = r.rev; }
         if (r.code === 'NOT_FOUND') flash('這個分類已被組員刪除。');
         else if (r.code === 'LOCKED') flash('組員正在輸入這個欄位，你的文字沒有送出：「' + mine + '」');
         else if (r.code === 'STALE') flash('組員已修改這個欄位，已顯示最新內容。你剛才的文字：「' + mine + '」');
-        if (isFocused(op.key)) document.activeElement.blur();
+        // 程式取消輸入：不觸發「離開欄位就儲存」，否則被拒絕的舊文字會再次送出（複檢 F2）
+        if (isFocused(op.key)) view.cancelEdit();
       }
     }
   }
@@ -364,7 +415,10 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   function dropFor(catId) {
     for (let i = queue.length - 1; i >= 0; i--) {
       const q = queue[i];
-      if ((q.type === 'move' && q.to === catId) || (q.type === 'text' && q.id === catId) || (q.type === 'add' && q.id === catId)) queue.splice(i, 1);
+      if ((q.type === 'move' && q.to === catId) || (q.type === 'text' && q.id === catId) || (q.type === 'add' && q.id === catId)) {
+        queue.splice(i, 1);
+        if (q.type === 'move' || q.type === 'text') resolveChain(q, false);
+      }
     }
     for (const key of [...texts.keys()]) if (key.endsWith(':' + catId)) texts.delete(key);
   }
@@ -375,11 +429,14 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   }
 
   // ---------- 操作鎖 ----------
+  let lockInflight = Promise.resolve();
   async function lock(target) {
     holdRelease();
     held = target;
     try {
-      const r = await rpc(client, 'group_lock', { p_session: sessionId, p_token: token, p_target: target });
+      const req = rpc(client, 'group_lock', { p_session: sessionId, p_token: token, p_target: target });
+      lockInflight = req.then(() => {}, () => {});
+      const r = await req;
       if (held !== target) return r.ok;   // 期間已改持有其他目標
       if (!r.ok) { held = null; return false; }
       clearInterval(renewTimer);
@@ -426,7 +483,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     const target = field + ':' + catId;
     const ok = await lock(target);
     if (!ok && held !== target && isFocused(target)) {
-      document.activeElement.blur();
+      view.cancelEdit();
       flash('組員正在輸入這個欄位，請稍後再試。');
       gsync?.refresh();
     }
