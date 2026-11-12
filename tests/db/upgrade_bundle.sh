@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 單一檔案升級（supabase/upgrade/upgrade.sql）的測試：
 #   1. 與 002／003／verify.sql 同步（由 build.sh 產生，沒有手動改動）
-#   2. 從已部署的 Phase 3（main 2bb50e4，複檢前版本）＋上課中資料升級：資料不變、14 項檢查全過、修正生效
+#   2. 從已部署的 Phase 3（main 2bb50e4，複檢前版本）＋上課中資料升級：資料不變、15 項檢查全過、修正生效
 #   3. 從 Phase 2（577e76c）升級：檢查全過
 #   4. 原子性：在交易中段注入錯誤 → 資料庫完全維持升級前狀態（沒有半套）
 #   5. 可重複執行；以 Supabase 式的預設權限（新資料表自動授權 anon）執行
@@ -42,7 +42,7 @@ digest() { psql_ -d "$1" -c "select md5(string_agg(t, '|' order by t)) from (
   select 'gs' || id || group_id || kind || data::text || is_complete || board_rev || created_at from public.group_snapshots union all
   select 'st' || session_id || phase || rev || editing_paused from public.session_state) x"; }
 verify_ok() { local bad; bad=$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|f$' || true)
-  [ "$bad" = "0" ] && [ "$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|t$')" = "14" ]; }
+  [ "$bad" = "0" ] && [ "$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|t$')" = "15" ]; }
 
 # 2. 已部署的 Phase 3（複檢前）＋上課中資料
 DB=story_friends_bundle_p3
@@ -72,7 +72,7 @@ psql_ -d $DB -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "升級失敗"
 [ "$(digest $DB)" = "$BEFORE" ] || fail "升級後既有資料改變"
 verify_ok $DB || { psql_ -d $DB -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
 psql_ -d $DB -c "select prosrc from pg_proc where proname = 'own_session'" | grep -q "for no key update" || fail "修正沒有生效"
-echo "ok - 從已部署的 Phase 3（2bb50e4）＋上課中資料升級：資料不變、14 項檢查全過、修正生效"
+echo "ok - 從已部署的 Phase 3（2bb50e4）＋上課中資料升級：資料不變、15 項檢查全過、修正生效"
 OUT=$(psql_ -d $DB -c "set role anon" -c "select public.group_update_category('$SID', '$TA', 'eeeeeeee-0000-4000-8000-000000000001', 'reason', 'x', null)" 2>&1 || true)
 echo "$OUT" | grep -q BAD_DATA || fail "升級後 null 版本號仍被接受：$OUT"
 [ "$(psql_ -d $DB -c "set role anon" -c "select public.student_group_board('$SID', '$TA')->'categories'->0->>'reason'" | tail -1)" = "升級前的理由" ] || fail "上課中資料無法讀取"
@@ -86,4 +86,4 @@ DB2=story_friends_bundle_p2
 mkdb $DB2 577e76c
 psql_ -d $DB2 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 Phase 2 升級失敗"
 verify_ok $DB2 || fail "從 Phase 2 升級後檢查未通過"
-echo "ok - 從 Phase 2（577e76c）以單一檔案升級：14 項檢查全過"
+echo "ok - 從 Phase 2（577e76c）以單一檔案升級：15 項檢查全過"

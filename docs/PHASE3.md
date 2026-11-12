@@ -1,6 +1,6 @@
 # Phase 3 交付說明｜04 故事找朋友：小組共作
 
-> **更新**：外部獨立複檢指出的 5 項 P1／P2 問題與其他項目已全部重現並修正，見 [`REVIEW_PHASE3.md`](REVIEW_PHASE3.md)。
+> **更新**：外部獨立複檢（兩輪）指出的問題已全部重現並修正，見 [`REVIEW_PHASE3.md`](REVIEW_PHASE3.md)。
 > 該文件中的測試數字與鎖定協定以修正後為準；升級請使用 `supabase/upgrade/upgrade.sql`。
 
 本文件對應 Phase 3 開發指令第十九節「交付要求」。

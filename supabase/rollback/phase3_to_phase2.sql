@@ -8,7 +8,9 @@
 --   （Phase 2 版本：GitHub 上 Phase 2 合併後的提交 577e76c，或 git show 577e76c:supabase/migrations/002_rpc.sql）
 --
 -- 不刪除任何資料：小組分類、提交快照、個人快照全部保留。
--- Phase 3 新增的 group_category_tombstones 資料表保留不動（Phase 2 不會使用它，也不開放讀取）。
+-- Phase 3 新增的 group_category_tombstones 資料表、session_state.personal_closed_at、groups.lock_rev 欄位保留不動
+-- （Phase 2 不會使用它們）。注意：回到 Phase 2 後，個人分類是否鎖定只看是否有個人快照；
+-- 「結束 03 時班上沒有學生」的場次在 Phase 2 不會被視為鎖定（這是 Phase 2 原本的行為）。
 -- =====================================================================
 
 -- Phase 2 時這三個內部函式定義在 001_init.sql，這裡還原為當時的版本
@@ -51,6 +53,18 @@ begin
   select g.id, g.session_id, p_kind, app.group_board_json(g.id),
          (app.group_problems(g.id) ->> 'complete')::boolean, g.board_rev
     from public.groups g where g.id = p_group;
+end $$;
+
+-- Phase 3 複檢修正改寫了 001 的 app.own_session（FOR NO KEY UPDATE），還原為 Phase 2 時的版本
+create or replace function app.own_session(p_session uuid) returns public.sessions
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare s public.sessions;
+begin
+  perform app.require_teacher();
+  select * into s from public.sessions where id = p_session for update;
+  if not found then raise exception 'SESSION_NOT_FOUND'; end if;
+  if s.teacher_id <> auth.uid() then raise exception 'FORBIDDEN'; end if;
+  return s;
 end $$;
 
 -- 移除 Phase 3 新增的函式

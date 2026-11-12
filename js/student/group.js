@@ -9,7 +9,12 @@
 //   * 每個操作在「使用者動作的當下」記下基準版本（expected_rev）與內容，重送時沿用同一份請求，
 //     絕不改用伺服器最新版本重新送出舊意圖（否則會在不知情下覆蓋組員的新成果；複檢 F1）。
 //     同一裝置對同一目標的連續操作，後一個的基準版本＝前一個經伺服器確認後的版本；前一個被拒絕時後一個一併取消。
-//   * 伺服器回應只會讓資料「往前」：單項版本比目前舊的回應不覆寫（複檢 F5）；讀取結果以 board_rev＋伺服器時間排序。
+//   * 伺服器回應只會讓資料「往前」：單項版本比目前舊的回應不覆寫（複檢 F5）；
+//     讀取結果以 board_rev、lock_rev、state_rev 三個資料庫版本判斷新舊（任一變小＝舊回應；第二輪複檢 D2）。
+//   * 文字草稿（第二輪複檢 R1、R2）：欄位第一次被改動時，記下「輸入框當時顯示內容」的版本作為基準；
+//     操作分為「從未送出（可合併最新文字）」與「已送出過（內容固定，只能重送原樣）」，後續輸入一律成為接續的新操作。
+//   * 刪除分類後立刻移動其中的故事：移動接在刪除之後，以刪除回傳的新版本為基準（第二輪複檢 R3）。
+//   * 操作鎖的取得、續約、釋放全部依序送出（同一裝置一次一個），不會有較早的取得請求晚到而留下幽靈鎖（第二輪複檢 R4）。
 //   * 重送安全：新增分類帶前端產生的 id（重送不會產生第二個、也不會重建已刪除的分類）；
 //     移動／改字若伺服器已是相同結果，回傳成功但不重複寫入；刪除已不存在的分類視為完成。
 //   * 即時通知（Realtime）只用來加速；收不到時每 2 秒輪詢一次。
@@ -51,6 +56,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   // 本機尚未確認的操作
   const queue = [];         // { type: add|move|delete|text|release, ... }
   const texts = new Map();  // 'name:<id>' / 'reason:<id>' → 本機目前輸入的內容（伺服器確認前）
+  const drafts = new Map(); // 同上 key → { base }：這次草稿的基準版本（第一次改動時輸入框所顯示內容的版本）
   let sending = false;
   let offline = false;
   let retryTimer = null;
@@ -131,22 +137,22 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
 
   // ---------- 伺服器資料 ----------
   function adopt(b, first = false) {
-    // 較舊的回應：忽略（畫面不回溯）。board_rev 相同時以伺服器讀取時間判斷（鎖清單不會因舊回應而「復活」）
-    if (!first && server && (b.board_rev < server.board_rev
-        || (b.board_rev === server.board_rev && (b.read_at ?? 0) < (server.read_at ?? 0)))) return;
+    // 較舊的回應：忽略（畫面不回溯）。三個版本來自同一個資料快照，較新的快照沒有任何一個會變小
+    if (!first && server && (b.board_rev < server.board_rev || (b.lock_rev ?? 0) < server.lock_rev
+        || (b.state_rev ?? 0) < server.state_rev)) return;
     const cats = new Map(b.categories.map((c) => [c.id, c]));
     const place = new Map(b.placements.map((p) => [p.card_id, { cat: p.category_id, rev: p.rev }]));
-    server = { board_rev: b.board_rev, read_at: b.read_at ?? 0, status: b.status, can_edit: b.can_edit, paused: b.paused,
-               phase: b.phase, cats, place, locks: b.locks || [], problems: b.problems };
+    server = { board_rev: b.board_rev, lock_rev: b.lock_rev ?? 0, state_rev: b.state_rev ?? 0, status: b.status,
+               can_edit: b.can_edit, paused: b.paused, phase: b.phase, cats, place, locks: b.locks || [], problems: b.problems };
     // 伺服器已確認的文字：清除對應的本機暫存（欄位仍在輸入中的除外）
     for (const [key, v] of texts) {
       const [field, id] = key.split(':');
       const c = cats.get(id);
       const editing = view?.editingField();
       const active = editing && editing.categoryId === id && editing.field === field;
-      if (!c) { texts.delete(key); continue; }
+      if (!c) { texts.delete(key); drafts.delete(key); continue; }
       if (!active && !queue.some((q) => q.type === 'text' && q.key === key) && !textTimers.has(key)
-          && (c[field] ?? '') === v) texts.delete(key);
+          && (c[field] ?? '') === v) { texts.delete(key); drafts.delete(key); }
     }
     if (lastSt && !serverEditable()) dropPendingEdits();
     render();
@@ -162,7 +168,9 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   // 畫面資料＝伺服器資料＋尚未確認的操作
   function display() {
     const cats = [];
-    for (const c of server.cats.values()) cats.push({ id: c.id, no: c.label_no, name: c.name, reason: c.reason });
+    // nameRev／reasonRev：讓畫面記住輸入框中顯示的內容是哪個版本（文字草稿的基準）
+    for (const c of server.cats.values()) cats.push({ id: c.id, no: c.label_no, name: c.name, reason: c.reason,
+      nameRev: c.name_rev, reasonRev: c.reason_rev });
     const placements = {};
     for (const [card, p] of server.place) if (p.cat) placements[card] = p.cat;
     let d = { categories: cats, placements };
@@ -208,13 +216,18 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
       if (held === 'card:' + info.cardId) clearInterval(renewTimer);   // 移動送出後不再續約
       enqueueVersioned({ type: 'move', key: 'card:' + info.cardId, cardId: info.cardId, to: info.categoryId });
     } else if (kind === 'delete') {
-      queue.push({ type: 'delete', id: info.categoryId });
+      // 記下被刪除分類中的故事：同一裝置之後移動這些故事時，要接在這個刪除之後
+      const shown = display();
+      const affected = cards.filter((c) => shown.placements[c.id] === info.categoryId).map((c) => c.id);
+      queue.push({ type: 'delete', id: info.categoryId, cards: affected });
     } else if (kind === 'rename' || kind === 'reason' || kind === 'rename-commit' || kind === 'reason-commit') {
       const field = kind.startsWith('rename') ? 'name' : 'reason';
       const id = info.categoryId;
       const cat = d.categories.find((c) => c.id === id);
       if (!cat) return;
       const key = field + ':' + id;
+      // 第一次改動：基準＝輸入框當時顯示內容的版本（有焦點的輸入框不會被遠端更新改寫，所以這就是學生看到的版本）
+      if (!drafts.has(key)) drafts.set(key, { base: info.baseRev ?? null });
       texts.set(key, field === 'name' ? cat.name : (cat.reason || ''));
       clearTimeout(textTimers.get(key));
       if (kind.endsWith('-commit')) { textTimers.delete(key); queueText(key); }
@@ -234,12 +247,14 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   }
 
   // 加入需要版本號的操作：基準版本在此刻決定（＝使用者動作時看到的版本），之後不再改變
-  function enqueueVersioned(op) {
-    // 文字欄位所屬的分類若還在等待新增確認，接在「新增」之後（確認後版本從 1 開始）
+  function enqueueVersioned(op, base) {
+    // 前置操作：同一目標尚未確認的操作；文字所屬的分類尚在新增；故事所在的分類尚在刪除
     const prev = [...queue].reverse().find((q) => (q.key === op.key && (q.type === 'move' || q.type === 'text'))
-      || (op.type === 'text' && q.type === 'add' && q.id === op.id));
-    if (prev) op.after = prev;          // 接在同一目標尚未確認的操作之後：等它確認後沿用其結果版本
-    else op.base = confirmedRev(op);
+      || (op.type === 'text' && q.type === 'add' && q.id === op.id)
+      || (op.type === 'move' && q.type === 'delete' && q.cards?.includes(op.cardId)));
+    op.fallbackBase = base ?? confirmedRev(op);
+    if (prev) op.after = prev;          // 等前置操作確認後，沿用其結果版本
+    else op.base = op.fallbackBase;
     queue.push(op);
   }
 
@@ -249,13 +264,26 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     const cur = server?.cats.get(id);
     // 與伺服器相同就不送
     if (cur && (cur[field] ?? '') === texts.get(key) && !queue.some((q) => q.key === key)) return;
-    // 尚未送出的同一欄位操作：合併（送出時才取最新文字）；已送出的：新增一個接續的操作
-    if (!queue.some((q) => q.type === 'text' && q.key === key && !q.sent)) enqueueVersioned({ type: 'text', key, field, id });
+    // 從未送出的同一欄位操作：合併（送出時才取最新文字）。
+    // 已送出過的（包含等待重送的）內容已固定，不可再合併：新文字成為接續的新操作（第二輪複檢 R1）
+    if (queue.some((q) => q.type === 'text' && q.key === key && !q.attempted)) { pump(); return; }
+    const d = drafts.get(key);
+    enqueueVersioned({ type: 'text', key, field, id }, d?.base ?? undefined);
     pump();
   }
 
   function flushTexts() {
     for (const [key, t] of textTimers) { clearTimeout(t); textTimers.delete(key); queueText(key); }
+  }
+
+  // 有改動但沒有任何操作涵蓋的文字（儲存完成前必須為空）
+  function uncoveredTexts() {
+    return [...texts.keys()].filter((key) => {
+      const [field, id] = key.split(':');
+      const cur = server?.cats.get(id);
+      if (!cur || (cur[field] ?? '') === texts.get(key)) return false;
+      return !textTimers.has(key) && !queue.some((q) => q.type === 'text' && q.key === key);
+    });
   }
 
   function dropPendingEdits() {
@@ -264,7 +292,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     queue.splice(sending ? 1 : 0);
     for (const t of textTimers.values()) clearTimeout(t);
     textTimers.clear();
-    if (!view?.editingField()) texts.clear();
+    if (!view?.editingField()) { texts.clear(); drafts.clear(); }
   }
 
   // ---------- 依序送出 ----------
@@ -274,6 +302,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     sending = true;
     const op = queue[0];
     op.sent = true;
+    op.attempted = true;   // 送出過：內容已固定（網路錯誤後只能原樣重送）
     clearTimeout(slowTimer);
     slowTimer = setTimeout(() => { slow = true; paint(); }, SLOW_MS);
     let r = null;
@@ -340,28 +369,34 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
       return rpc(client, 'group_update_category', { ...base, p_category: op.id, p_field: op.field, p_value: op.value,
         p_expected_rev: op.base });
     }
-    if (op.type === 'release') await lockInflight;   // 先等取得操作權的請求完成，避免「釋放」比「取得」先到（幽靈鎖）
     if (op.type === 'release') {
-      return rpc(client, 'group_lock', { ...base, p_target: op.target, p_release: true }).catch((e) => {
-        if (e.code === 'NETWORK') throw e; return { ok: true };
-      });
+      // 排在這台裝置所有先前的取得／續約之後送出（依序），不會比取得先到
+      return lockCall(op.target, true).then((r) => r || { ok: true }).catch((e) => { if (e.code === 'NETWORK') throw e; return { ok: true }; });
     }
     return { ok: true };
   }
 
   // 依伺服器回應更新已確認資料；失敗的操作直接放棄（畫面會回到伺服器資料）
   // 同一目標接續的操作：前一個確認後沿用其版本；前一個失敗則一併取消（它們建立在被拒絕的狀態上）
+  // rev 可以是數字，或依接續操作決定版本的函式
   function resolveChain(op, ok, rev) {
     for (let i = queue.length - 1; i >= 0; i--) {
       const q = queue[i];
       if (q.after !== op) continue;
-      if (ok) { q.base = rev; delete q.after; } else { queue.splice(i, 1); resolveChain(q, false); }
+      if (ok) { q.base = typeof rev === 'function' ? rev(q) : rev; delete q.after; }
+      else { queue.splice(i, 1); resolveChain(q, false); if (q.type === 'text') { texts.delete(q.key); drafts.delete(q.key); } }
     }
   }
 
   function settle(op, r) {
     if (op.type === 'move' || op.type === 'text') resolveChain(op, Boolean(r.ok), r.rev);
     if (op.type === 'add') resolveChain(op, Boolean(r.ok), 1);   // 新分類的名稱與理由版本從 1 開始
+    if (op.type === 'delete') {
+      const revs = new Map((r.cards || []).map((x) => [x.card_id, x.rev]));
+      const okDel = Boolean(r.ok) || r.code === 'NOT_FOUND';
+      resolveChain(op, okDel, (q) => revs.get(q.cardId) ?? q.fallbackBase);
+      if (!okDel) flash(`組員正在編輯「${catName(op.id)}」，暫時不能刪除；剛才的移動也已取消。`);
+    }
     if (op.type === 'add') {
       if (r.ok) {
         if (!server.cats.has(op.id)) server.cats.set(op.id, { id: op.id, label_no: r.label_no, name: '', reason: '', name_rev: 1, reason_rev: 1 });
@@ -386,7 +421,11 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     } else if (op.type === 'delete') {
       if (r.ok || r.code === 'NOT_FOUND') {
         server.cats.delete(op.id);
-        for (const [card, p] of server.place) if (p.cat === op.id) server.place.set(card, { cat: null, rev: p.rev + 1 });
+        const revs = new Map((r.cards || []).map((x) => [x.card_id, x.rev]));
+        for (const [card, p] of server.place) {
+          if (revs.has(card) && revs.get(card) >= p.rev) server.place.set(card, { cat: null, rev: revs.get(card) });
+          else if (p.cat === op.id && !revs.size) server.place.set(card, { cat: null, rev: p.rev });
+        }
         dropFor(op.id);
       } else if (r.code === 'LOCKED') flash(`組員正在編輯「${catName(op.id)}」，暫時不能刪除。`);
     } else if (op.type === 'text') {
@@ -395,11 +434,17 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
       if (r.ok) {
         // 只讓版本往前（複檢 F5）；unchanged＝伺服器早已是這個值
         if (cur && r.rev >= (cur[revKey] ?? 0) && !r.unchanged) { cur[op.field] = op.value; cur[revKey] = r.rev; }
-        if (texts.get(op.key) === op.value && !textTimers.has(op.key) && !isFocused(op.key)) texts.delete(op.key);
+        const d = drafts.get(op.key);
+        if (d) d.base = r.rev;   // 同一次編輯中之後的輸入，以自己剛確認的版本為基準
+        if (texts.get(op.key) === op.value && !textTimers.has(op.key) && !isFocused(op.key)) { texts.delete(op.key); drafts.delete(op.key); }
+        // 送出期間又輸入了新內容，但沒有任何操作涵蓋：補送（第二輪複檢 R1）
+        else if (texts.has(op.key) && texts.get(op.key) !== op.value && !textTimers.has(op.key)
+                 && !queue.some((q) => q.type === 'text' && q.key === op.key)) queueText(op.key);
       } else {
         const mine = texts.get(op.key) ?? op.value;
         // 放棄這個欄位所有尚未送出的本機文字（不再自動重送；複檢 F2）
         texts.delete(op.key);
+        drafts.delete(op.key);
         clearTimeout(textTimers.get(op.key)); textTimers.delete(op.key);
         for (let i = queue.length - 1; i >= 0; i--) if (queue[i].type === 'text' && queue[i].key === op.key) queue.splice(i, 1);
         if (r.code === 'STALE' && cur && r.rev >= (cur[revKey] ?? 0)) { cur[op.field] = r.value; cur[revKey] = r.rev; }
@@ -420,7 +465,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
         if (q.type === 'move' || q.type === 'text') resolveChain(q, false);
       }
     }
-    for (const key of [...texts.keys()]) if (key.endsWith(':' + catId)) texts.delete(key);
+    for (const key of [...texts.keys()]) if (key.endsWith(':' + catId)) { texts.delete(key); drafts.delete(key); }
   }
 
   function isFocused(key) {
@@ -429,28 +474,37 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   }
 
   // ---------- 操作鎖 ----------
-  let lockInflight = Promise.resolve();
+  // 這台裝置所有 group_lock 請求（取得、續約、釋放）依序送出：前一個完成才送下一個。
+  // shouldRun：輪到它時才判斷是否仍需要（例如已離開欄位的取得、已釋放的續約就不送）
+  let lockSeq = Promise.resolve();
+  function lockCall(target, isRelease, shouldRun = () => true) {
+    const p = lockSeq.then(() => (shouldRun()
+      ? rpc(client, 'group_lock', { p_session: sessionId, p_token: token, p_target: target, p_release: isRelease })
+      : null));
+    lockSeq = p.then(() => {}, () => {});
+    return p;
+  }
+
   async function lock(target) {
     holdRelease();
     held = target;
     try {
-      const req = rpc(client, 'group_lock', { p_session: sessionId, p_token: token, p_target: target });
-      lockInflight = req.then(() => {}, () => {});
-      const r = await req;
-      if (held !== target) return r.ok;   // 期間已改持有其他目標
+      const r = await lockCall(target, false, () => held === target);
+      if (!r) return false;                 // 輪到時已不需要（學生已離開）：沒有送出
+      if (held !== target) return r.ok;     // 期間已改持有其他目標（之後的取得或釋放會依序處理）
       if (!r.ok) { held = null; return false; }
       clearInterval(renewTimer);
       renewTimer = setInterval(async () => {
         if (held !== target) return;
         try {
-          const rr = await rpc(client, 'group_lock', { p_session: sessionId, p_token: token, p_target: target });
-          if (!rr.ok) lostLock(target);
+          const rr = await lockCall(target, false, () => held === target);
+          if (rr && !rr.ok) lostLock(target);
         } catch (e) { if (e.code !== 'NETWORK') lostLock(target); }
       }, LOCK_RENEW_MS);
       return true;
     } catch (e) {
       if (held === target) held = null;
-      return e.code === 'NETWORK' ? false : false;
+      return false;
     }
   }
   function holdRelease() { clearInterval(renewTimer); renewTimer = null; held = null; }
@@ -539,14 +593,17 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   }
 
   // ---------- 提交 ----------
+  // 等到所有改動都由伺服器確認：佇列清空，且沒有任何未被操作涵蓋的文字（第二輪複檢 R1）
   async function waitSaved(ms = 8000) {
     const until = Date.now() + ms;
     flushTexts();
-    while ((queue.length || sending) && Date.now() < until && !offline) {
+    for (const key of uncoveredTexts()) queueText(key);
+    while ((queue.length || sending || uncoveredTexts().length) && Date.now() < until && !offline) {
+      for (const key of uncoveredTexts()) queueText(key);
       pump();
       await new Promise((r) => setTimeout(r, 120));
     }
-    return !queue.length && !sending && !offline;
+    return !queue.length && !sending && !offline && uncoveredTexts().length === 0;
   }
 
   async function submit() {

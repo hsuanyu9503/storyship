@@ -102,7 +102,8 @@ for f in "$TMP/002_rpc.sql" "$TMP/003_security.sql" "$ROOT/supabase/rollback/pha
 [ -z "$(q "select to_regprocedure('public.group_add_category(uuid,text,uuid)')")" ] || fail "回復後新版函式仍存在"
 stage 04 >/dev/null
 [ "$(q "set role anon; select public.student_group_board('$SID', '$TC')->>'status'" | tail -1)" = "locked" ] || fail "回復後無法讀取小組資料"
-echo "ok - 可回復到 Phase 2 函式版本，所有資料保留"
+psql_ -d "$DB" -c "select prosrc from pg_proc where proname = 'own_session'" | grep -q "for no key update" && fail "回復後 app.own_session 仍是 Phase 3 版本"
+echo "ok - 可回復到 Phase 2 函式版本（含 app.own_session），所有資料保留"
 for f in "$ROOT/supabase/migrations/002_rpc.sql" "$ROOT/supabase/migrations/003_security.sql"; do psql_ -d "$DB" -f "$f" >/dev/null 2>&1; done
 BAD=$(psql_ -d "$DB" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|f$' || true)
 [ "$BAD" = "0" ] || fail "再次升級後檢查未通過"
