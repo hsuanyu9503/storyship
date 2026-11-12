@@ -20,6 +20,11 @@ revoke all on public.group_category_tombstones from anon, authenticated, public;
 
 -- 個人分類已結束的明確標記（複檢：結束 03 時班上沒有學生就不會有快照，不能只靠快照判斷）
 alter table public.session_state add column if not exists personal_closed_at timestamptz;
+-- 小組操作鎖的版本（取得新鎖、釋放鎖時 +1）。與 board_rev、session_state.rev 一起讓前端判斷回應新舊：
+-- 同一個資料快照讀出的三個版本彼此一致，較新的快照三者都不會變小（第二輪複檢 D2：不用時鐘時間排序）
+alter table public.groups add column if not exists lock_rev bigint not null default 0;
+-- 刪除分類的結果（回到未分類的故事與其新版本）：刪除已完成但回應遺失時，重送可以取回同一份結果（第三輪複檢 N2）
+alter table public.group_category_tombstones add column if not exists result jsonb;
 
 -- =====================================================================
 -- 鎖定協定（Phase 3 複檢後整理；所有寫入路徑都遵守）
@@ -239,6 +244,7 @@ begin
   if not found then raise exception 'NO_GROUP'; end if;
   if g.id = p.group_id and p.status = 'active' then return; end if;
   update public.groups set seat_seq = seat_seq + 1 where id = g.id returning * into g;
+  update public.groups set lock_rev = lock_rev + 1 where id in (select group_id from public.group_locks where participant_id = p.id);
   delete from public.group_locks where participant_id = p.id;
   update public.participants set group_id = g.id, status = 'active', seat_label = g.seat_seq || ' 號'
    where id = p.id;
@@ -252,6 +258,7 @@ begin
   if not found then raise exception 'NOT_JOINED'; end if;
   perform app.own_session(p.session_id);
   perform 1 from public.session_state where session_id = p.session_id for update;   -- 同上（複檢 F4）
+  update public.groups set lock_rev = lock_rev + 1 where id in (select group_id from public.group_locks where participant_id = p.id);
   delete from public.group_locks where participant_id = p.id;
   update public.participants set status = 'removed' where id = p.id;
 end $$;
@@ -310,6 +317,11 @@ declare s public.sessions; g public.groups; p public.participants; v_hash text; 
 begin
   v_hash := app.hash_token(p_token);
   select * into s from public.sessions where join_code = upper(btrim(p_code)) and status = 'active';
+  if not found then raise exception 'SESSION_NOT_FOUND'; end if;
+  -- 與其他學生寫入相同的鎖定順序：先 session_state（SHARE）再 groups。
+  -- 教師刪除場次會先取 session_state FOR UPDATE，因此兩者依序執行，不會死結（第二輪複檢 D1）
+  perform 1 from public.session_state where session_id = s.id for share;
+  select * into s from public.sessions where id = s.id and status = 'active';
   if not found then raise exception 'SESSION_NOT_FOUND'; end if;
   select * into p from public.participants where session_id = s.id and token_hash = v_hash;
   -- 已加入的裝置：直接恢復原本身分（換組需由教師調整）
@@ -648,8 +660,10 @@ begin
   select * into g from public.groups where id = p.group_id;
   return app.group_board_json(g.id) || jsonb_build_object(
     'group_id', g.id, 'group_number', g.number, 'group_name', g.name, 'status', g.status, 'board_rev', g.board_rev,
-    -- 伺服器讀取時間：board_rev 相同（例如只有操作鎖改變）時，前端用來分辨回應先後（不用客戶端時間）
-    'read_at', extract(epoch from clock_timestamp()),
+    -- 回應新舊的判斷依據（與資料同一快照）：board_rev（小組內容）、lock_rev（操作鎖）、state_rev（環節／暫停）
+    'lock_rev', g.lock_rev, 'state_rev', st.rev,
+    -- 讀取交易的時間（now()＝交易開始時間，與下方過濾逾時鎖的 now() 相同）：三個版本都相同時用來排序
+    'read_now', extract(epoch from now()),
     'paused', st.editing_paused, 'phase', st.phase,
     'can_edit', s.status = 'active' and st.phase = '04' and not st.editing_paused and g.status = 'open',
     'problems', app.group_problems(g.id),
@@ -764,10 +778,16 @@ end $$;
 -- 刪除分類：其中的故事回到未分類區（不會消失）
 create or replace function public.group_delete_category(p_session uuid, p_token text, p_category uuid)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
-declare c record;
+declare c record; v_cards jsonb;
 begin
   select * into c from app.group_edit_ctx(p_session, p_token);
   if not exists (select 1 from public.group_categories where id = p_category and group_id = c.group_id) then
+    -- 同一個刪除的重送（第一次已完成、回應遺失）：回傳第一次的結果，讓接續的操作有正確的基準版本
+    select result into v_cards from public.group_category_tombstones where category_id = p_category and group_id = c.group_id;
+    if found then
+      return jsonb_build_object('ok', true, 'duplicate', true, 'cards', coalesce(v_cards -> 'cards', '[]'::jsonb),
+                                'board_rev', (select board_rev from public.groups where id = c.group_id));
+    end if;
     return jsonb_build_object('ok', false, 'code', 'NOT_FOUND');
   end if;
   -- 其他組員正在編輯此分類的文字，或正在拖曳其中的故事 → 拒絕
@@ -778,14 +798,17 @@ begin
                                        where group_id = c.group_id and category_id = p_category))) then
     return jsonb_build_object('ok', false, 'code', 'LOCKED');
   end if;
-  update public.group_placements set category_id = null, rev = rev + 1, updated_at = now()
-   where group_id = c.group_id and category_id = p_category;
+  -- 回到未分類的故事版本 +1，並回傳新版本：同一裝置緊接著移動這些故事時以此為基準（第二輪複檢 R3）
+  with u as (update public.group_placements set category_id = null, rev = rev + 1, updated_at = now()
+              where group_id = c.group_id and category_id = p_category returning card_id, rev)
+  select coalesce(jsonb_agg(jsonb_build_object('card_id', card_id, 'rev', rev)), '[]'::jsonb) into v_cards from u;
   delete from public.group_locks where group_id = c.group_id
      and target in ('name:' || p_category, 'reason:' || p_category);
   delete from public.group_categories where id = p_category;
-  insert into public.group_category_tombstones (category_id, group_id) values (p_category, c.group_id)
+  insert into public.group_category_tombstones (category_id, group_id, result)
+  values (p_category, c.group_id, jsonb_build_object('cards', v_cards))
   on conflict (category_id) do nothing;
-  return jsonb_build_object('ok', true, 'board_rev', app.bump_board(c.group_id));
+  return jsonb_build_object('ok', true, 'cards', v_cards, 'board_rev', app.bump_board(c.group_id));
 end $$;
 
 -- 取得／續約／釋放操作鎖。每位學生同時只持有一個鎖（取得新鎖會釋放舊鎖）。
@@ -799,6 +822,7 @@ begin
   v_id := split_part(p_target, ':', 2)::uuid;
   if p_release then
     delete from public.group_locks where group_id = c.group_id and target = p_target and participant_id = c.participant_id;
+    if found then update public.groups set lock_rev = lock_rev + 1 where id = c.group_id; end if;
     return jsonb_build_object('ok', true);
   end if;
   if (v_kind = 'card' and not exists (select 1 from public.story_cards where id = v_id and content_set_id = c.content_set_id))
@@ -814,7 +838,10 @@ begin
   insert into public.group_locks (group_id, target, participant_id, expires_at)
   values (c.group_id, p_target, c.participant_id, v_exp)
   on conflict (group_id, target) do update set participant_id = excluded.participant_id, expires_at = excluded.expires_at;
-  if v_holder is null then perform app.notify('group:' || c.group_id, 'lock'); end if;
+  if v_holder is null then
+    update public.groups set lock_rev = lock_rev + 1 where id = c.group_id;   -- 新取得（續約不改版本）
+    perform app.notify('group:' || c.group_id, 'lock');
+  end if;
   return jsonb_build_object('ok', true, 'expires_at', v_exp);
 end $$;
 

@@ -653,6 +653,217 @@ async function inViewport(page, sel) {
       ok(after.cats[2].name === '乙的名稱', '複檢 F2：組員的新名稱保留，並提示學生自己剛才輸入的文字');
     }
 
+    // ---------- 第二輪複檢 R1～R4 ----------
+    const catIdOf = (p, i) => p.evaluate((i) => document.querySelectorAll('.gw-main .bd-cat')[i]?.dataset.drop, i);
+    const cardIdOf = (p, t) => p.evaluate((t) => [...document.querySelectorAll('.gw-main .sc')].find((e) => e.querySelector('.sc-title').textContent === t)?.dataset.card, t);
+    async function eventually(fn, ms = 15000) {
+      const until = Date.now() + ms;
+      while (Date.now() < until) { if (await fn()) return true; await s0.waitForTimeout(300); }
+      return false;
+    }
+
+    // R1：第一次文字寫入網路失敗、等待重試期間學生改成新文字並離開欄位 → 伺服器與其他組員必須是新文字
+    if (!process.env.SKIP_R1) {
+      const allow = { v: false };
+      await s0.route('**/rest/v1/rpc/group_update_category', (route) => {
+        if (body(route.request()).p_value === 'R1第一版' && !allow.v) return route.abort('failed');
+        return route.continue();
+      });
+      await gCat(s0, 2).locator('.bd-reason').tap();
+      await s0.keyboard.insertText('R1第一版');
+      await s0.waitForTimeout(1100);                                  // 送出 → 網路失敗 → 等待重試
+      await s0.locator(`${G} .bd-cat >> nth=2 >> .bd-reason`).waitFor({ state: 'visible', timeout: 15000 });
+      await gCat(s0, 2).locator('.bd-reason').fill('R1第二版');
+      await gCat(s0, 2).locator('.bd-reason').blur();
+      allow.v = true;                                                 // 之後的重送成功
+      const okR1 = await eventually(async () => (await gCat(s1, 2).locator('.bd-reason').inputValue()) === 'R1第二版', 25000);
+      await s0.unroute('**/rest/v1/rpc/group_update_category');
+      ok(okR1, '第二輪複檢 R1：重試期間改寫的新文字有送到伺服器（組員看到的是新文字）');
+      await s1.reload();
+      await waitText(s1, '第 1 組｜共同分類');
+      await s1.waitForTimeout(500);
+      ok((await gCat(s1, 2).locator('.bd-reason').inputValue()) === 'R1第二版', '第二輪複檢 R1：重新整理後仍是新文字');
+    }
+
+    // R2：A 聚焦欄位後，B 修改同一欄位（A 沒看到 B 的鎖），A 之後才輸入 → 必須衝突提示，不能覆蓋 B
+    if (!process.env.SKIP_R2) {
+      const cat2 = await catIdOf(s0, 2);
+      const lockGo = deferred(); const readsGo = deferred(); let holdReads = true;
+      await s0.route('**/rest/v1/rpc/group_lock', async (route) => {
+        const b = body(route.request());
+        if (b.p_target === 'name:' + cat2 && !b.p_release) await lockGo.p;   // A 的取得鎖請求延遲
+        return route.continue().catch(() => {});
+      });
+      await s0.route('**/rest/v1/rpc/student_group_board', async (route) => { if (holdReads) await readsGo.p; return route.continue().catch(() => {}); });
+      await gCat(s0, 2).locator('.bd-name').tap();                   // A 聚焦（畫面上是目前的名稱）
+      await gCat(s1, 2).locator('.bd-name').tap();                   // B 修改同一名稱（A 的鎖尚未到伺服器）
+      await gCat(s1, 2).locator('.bd-name').fill('R2乙的名稱');
+      await gCat(s1, 2).locator('.bd-name').blur();
+      await converge([s1, s3], (x) => x.cats[2].name === 'R2乙的名稱');
+      await s1.waitForTimeout(2500);                                   // B 的鎖已釋放
+      holdReads = false; readsGo.res();                                // A 讀到 B 的版本（輸入框有焦點，不會被改寫）
+      await s0.waitForTimeout(2500);
+      lockGo.res();                                                    // A 的取得鎖請求現在才成功
+      await s0.waitForTimeout(800);
+      await s0.keyboard.insertText('R2甲');                            // A 在自己看到的舊內容上輸入
+      await gCat(s0, 2).locator('.bd-name').blur();
+      await s0.waitForTimeout(2500);
+      await s0.unroute('**/rest/v1/rpc/group_lock');
+      await s0.unroute('**/rest/v1/rpc/student_group_board');
+      const st2 = JSON.parse(await converge([s0, s1, s3]));
+      ok(st2.cats[2].name === 'R2乙的名稱', `第二輪複檢 R2：A 基於舊內容的輸入沒有覆蓋 B 的新名稱（結果：${st2.cats[2].name}）`);
+      ok((await text(s0)).includes('組員已修改這個欄位'), '第二輪複檢 R2：A 看到衝突提示與自己剛才輸入的文字');
+    }
+
+    // R3：刪除分類的回應尚未回來，學生立刻移動回到未分類的故事 → 必須成功（不是「組員剛剛移動」）
+    if (!process.env.SKIP_R3) {
+      await s0.click(`${G} .bd-add`);
+      await converge([s0, s1, s3], (x) => x.cats.length === 4);
+      const K = JSON.parse(await gState(s0)).unplaced[0];
+      await gTapMove(s0, K, gCat(s0, 3));
+      await converge([s0, s1, s3], (x) => x.cats[3].cards.includes(K));
+      const delGo = deferred();
+      await s0.route('**/rest/v1/rpc/group_delete_category', async (route) => { const r = await route.fetch(); await delGo.p; return route.fulfill({ response: r }); });
+      await gCat(s0, 3).locator('.bd-del').click();
+      await s0.click('dialog button:has-text("刪除分類")');
+      await s0.waitForFunction((k) => [...document.querySelectorAll('.gw-main .bd-left .sc-title')].some((e) => e.textContent === k), K, { timeout: 8000 });
+      await gTapMove(s0, K, gCat(s0, 1));                              // 立刻移到分類 2
+      await s0.waitForTimeout(400);
+      delGo.res();
+      await s0.waitForTimeout(2500);
+      await s0.unroute('**/rest/v1/rpc/group_delete_category');
+      const st3 = JSON.parse(await converge([s0, s1, s3], (x) => x.cats.length === 3));
+      ok(st3.cats[1].cards.includes(K), `第二輪複檢 R3：刪除後立刻移動的故事成功放入新分類（${K}）`);
+      ok(!(await text(s0)).includes('組員剛剛移動'), '第二輪複檢 R3：沒有錯誤的「組員剛剛移動」提示');
+      await gTapMove(s0, K, 'unplaced');
+      await converge([s0, s1, s3], (x) => x.unplaced.includes(K));
+    }
+
+    // R4：多個取得鎖請求在途時，較早的取得請求最後才到伺服器 → 不得留下幽靈鎖
+    if (!process.env.SKIP_R4) {
+      const cat2 = await catIdOf(s0, 2);
+      const l1Go = deferred(); const wGo = deferred();
+      await s0.route('**/rest/v1/rpc/group_lock', async (route) => {
+        const b = body(route.request());
+        if (b.p_target === 'name:' + cat2 && !b.p_release && !l1Go.done) { l1Go.done = true; await l1Go.p; }
+        return route.continue().catch(() => {});
+      });
+      await s0.route('**/rest/v1/rpc/group_move_card', async (route) => { await wGo.p; return route.continue().catch(() => {}); });
+      const W = JSON.parse(await gState(s0)).unplaced[0];
+      await gTapMove(s0, W, gCat(s0, 0));                              // 先前的寫入：在途、阻擋佇列
+      await gCat(s0, 2).locator('.bd-name').tap();                     // L1（延遲）
+      await gCat(s0, 2).locator('.bd-name').blur();                    // R1 排隊
+      await gCat(s0, 2).locator('.bd-reason').tap();                   // L2
+      await s0.waitForTimeout(300);
+      await gCat(s0, 2).locator('.bd-reason').blur();                  // R2 排隊
+      wGo.res();                                                       // 先前的寫入完成 → R1、R2 送出
+      await s0.waitForTimeout(1500);
+      l1Go.res();                                                      // L1 最後才到伺服器
+      await s0.waitForTimeout(800);
+      await s0.unroute('**/rest/v1/rpc/group_lock');
+      await s0.unroute('**/rest/v1/rpc/group_move_card');
+      await s1.waitForTimeout(4000);   // 組員至少同步過一次（幽靈鎖若存在會維持 15 秒）
+      const locked = await s1.evaluate(() => document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-name')?.readOnly);
+      ok(!locked, '第二輪複檢 R4：延遲到達的取得鎖請求沒有留下幽靈鎖（組員可以立即編輯）');
+      await gTapMove(s0, W, 'unplaced');
+      await converge([s0, s1, s3], (x) => x.unplaced.includes(W));
+    }
+
+    // ---------- 第三輪複檢 N1、N2 ----------
+    // N1：離開欄位的釋放排在延遲的文字寫入之後；寫入完成前又重新聚焦同一欄位 → 舊的釋放不得解除新的鎖
+    if (!process.env.SKIP_N1) {
+      const cat2 = await catIdOf(s0, 2);
+      const wGo = deferred(); let acquires = 0; const renewHold = deferred();
+      await s0.route('**/rest/v1/rpc/group_update_category', async (route) => {
+        const r = await route.fetch(); await wGo.p; return route.fulfill({ response: r }).catch(() => {});
+      });
+      await s0.route('**/rest/v1/rpc/group_lock', async (route) => {
+        const b = body(route.request());
+        if (b.p_target === 'name:' + cat2 && !b.p_release && ++acquires > 2) await renewHold.p;   // 之後的續約暫緩，避免掩蓋問題
+        return route.continue().catch(() => {});
+      });
+      await gCat(s0, 2).locator('.bd-name').tap();            // 第一次取得
+      await s0.waitForTimeout(700);
+      await s0.keyboard.insertText('N1');
+      await gCat(s0, 2).locator('.bd-name').blur();           // 文字寫入（回應延遲）＋釋放排隊
+      await s0.waitForTimeout(400);
+      await gCat(s0, 2).locator('.bd-name').tap();            // 重新聚焦：第二次取得
+      await s0.waitForTimeout(800);
+      wGo.res();                                              // 寫入回應到達 → 舊的釋放輪到送出
+      await s1.waitForTimeout(3000);                          // 組員同步（A 仍在輸入）
+      const lockedN1 = await s1.evaluate(() => document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-name')?.readOnly);
+      renewHold.res();
+      await gCat(s0, 2).locator('.bd-name').blur();
+      await s0.unroute('**/rest/v1/rpc/group_update_category');
+      await s0.unroute('**/rest/v1/rpc/group_lock');
+      ok(lockedN1, '第三輪複檢 N1：舊的釋放沒有解除重新聚焦後的鎖（A 仍在輸入時組員不能編輯）');
+      await s1.waitForFunction(() => !document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-name')?.readOnly, null, { timeout: 12000 });
+      ok(true, '第三輪複檢 N1：A 真正離開欄位後鎖才解除');
+    }
+
+    // N2：刪除已寫入但回應遺失，重送後接續的移動仍必須成功（不能用刪除前的版本）
+    if (!process.env.SKIP_N2) {
+      await s0.click(`${G} .bd-add`);
+      await converge([s0, s1, s3], (x) => x.cats.length === 4);
+      const K = JSON.parse(await gState(s0)).unplaced[0];
+      await gTapMove(s0, K, gCat(s0, 3));
+      await converge([s0, s1, s3], (x) => x.cats[3].cards.includes(K));
+      let first = true; const retryGo = deferred(); const dropGo = deferred(); const committed = deferred();
+      await s0.route('**/rest/v1/rpc/group_delete_category', async (route) => {
+        // 第一次：伺服器已刪除，但回應先不回來（期間學生移動故事），之後回應遺失
+        if (first) { first = false; await route.fetch(); committed.res(); await dropGo.p; return route.abort('failed'); }
+        await retryGo.p; return route.continue().catch(() => {});
+      });
+      await gCat(s0, 3).locator('.bd-del').click();
+      await s0.click('dialog button:has-text("刪除分類")');
+      await s0.waitForFunction((k) => [...document.querySelectorAll('.gw-main .bd-left .sc-title')].some((e) => e.textContent === k), K, { timeout: 8000 });
+      await committed.p;
+      await gTapMove(s0, K, gCat(s0, 1));                     // 刪除回應尚未回來：移動接在刪除之後
+      await s0.waitForTimeout(300);
+      dropGo.res();                                            // 刪除的回應遺失
+      await s0.waitForTimeout(3000);                           // 輪詢已讀到刪除後的版本
+      retryGo.res();
+      await s0.waitForTimeout(6000);
+      await s0.unroute('**/rest/v1/rpc/group_delete_category');
+      const stN2 = JSON.parse(await converge([s0, s1, s3], (x) => x.cats.length === 3, 20000));
+      ok(stN2.cats[1].cards.includes(K), `第三輪複檢 N2：刪除回應遺失後，接續的移動仍成功（${K} 在分類 2）`);
+      ok(!(await text(s0)).includes('組員剛剛移動'), '第三輪複檢 N2：沒有錯誤的「組員剛剛移動」提示');
+      await gTapMove(s0, K, 'unplaced');
+      await converge([s0, s1, s3], (x) => x.unplaced.includes(K));
+    }
+
+    // N2 防護：刪除回應遺失後，另一位組員先移動了同一張故事 → A 接續的移動必須被拒絕（不得改用最新版本覆蓋組員）
+    if (!process.env.SKIP_N2) {
+      await s0.click(`${G} .bd-add`);
+      await converge([s0, s1, s3], (x) => x.cats.length === 4);
+      const K = JSON.parse(await gState(s0)).unplaced[0];
+      await gTapMove(s0, K, gCat(s0, 3));
+      await converge([s0, s1, s3], (x) => x.cats[3].cards.includes(K));
+      let first = true; const retryGo = deferred(); const dropGo = deferred(); const committed = deferred();
+      await s0.route('**/rest/v1/rpc/group_delete_category', async (route) => {
+        if (first) { first = false; await route.fetch(); committed.res(); await dropGo.p; return route.abort('failed'); }
+        await retryGo.p; return route.continue().catch(() => {});
+      });
+      await gCat(s0, 3).locator('.bd-del').click();
+      await s0.click('dialog button:has-text("刪除分類")');
+      await committed.p;
+      await gTapMove(s0, K, gCat(s0, 1));                     // A：接在刪除之後，移到分類 2
+      await s0.waitForTimeout(300);
+      dropGo.res();
+      await s1.waitForFunction((k) => [...document.querySelectorAll('.gw-main .bd-left .sc-title')].some((e) => e.textContent === k), K, { timeout: 12000 });
+      // A 移動時取得的卡片鎖仍在（移動排在刪除之後），B 要等它逾時（最長 15 秒）才能操作——這本身就是保護
+      await s1.waitForSelector(`${G} .sc:has(.sc-title:text-is("${K}")) .sc-grip:not(.sc-grip-locked)`, { timeout: 25000 });
+      await gTapMove(s1, K, gCat(s1, 0));                     // 組員 B：先把它移到分類 1
+      await converge([s1, s3], (x) => x.cats[0].cards.includes(K));
+      retryGo.res();
+      await s0.waitForTimeout(6000);
+      await s0.unroute('**/rest/v1/rpc/group_delete_category');
+      const stG = JSON.parse(await converge([s0, s1, s3], (x) => x.cats.length === 3, 20000));
+      ok(stG.cats[0].cards.includes(K), '第三輪複檢 N2 防護：組員在刪除後的移動被保留，A 的舊意圖沒有覆蓋它');
+      await gTapMove(s0, K, 'unplaced');
+      await converge([s0, s1, s3], (x) => x.unplaced.includes(K));
+    }
+
     // 刪除分類：他人正在輸入該分類時不能刪除；刪除後故事回到未分類
     await gCat(s1, 2).locator('.bd-name').tap();
     await s0.waitForFunction(() => document.querySelectorAll('.gw-main .bd-cat')[2]?.querySelector('.bd-del')?.disabled, null, { timeout: 12000 });
@@ -783,7 +994,9 @@ async function inViewport(page, sel) {
     await waitText(teacher, '仍有小組尚未提交');
     await teacher.click('text=確認結束，保存各組目前成果');
     await waitText(proj, '分類成果大公開');
-    ok((await teacher.textContent('.pill')).includes('05'), '05：教師確認後結束共同分類，進入第五環節');
+    const pill0 = await teacher.textContent('.pill');
+    if (!pill0.includes('05')) { await teacher.waitForTimeout(2000); console.log('DIAG pill', JSON.stringify(pill0), '→ 2 秒後', JSON.stringify(await teacher.textContent('.pill')), await teacher.evaluate(() => document.querySelector('.toasts')?.innerText || '')); }
+    ok(pill0.includes('05'), '05：教師確認後結束共同分類，進入第五環節');
     await s3c.close();
 
     // ---------- 06：私下預覽不影響投影 ----------

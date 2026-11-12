@@ -24,6 +24,8 @@ export function normalize(data, cards) {
     ids.add(c.id);
     const cat = { id: c.id, no: Number(c.no) || categories.length + 1, name: String(c.name ?? '') };
     if (c.reason != null) cat.reason = String(c.reason);
+    if (c.nameRev != null) cat.nameRev = c.nameRev;        // 小組：名稱、理由的伺服器版本（畫面用來記住基準）
+    if (c.reasonRev != null) cat.reasonRev = c.reasonRev;
     categories.push(cat);
   }
   const cardIds = new Set((cards || []).map((c) => c.id));

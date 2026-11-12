@@ -157,7 +157,8 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     const push = (kind) => {
       if (el.readOnly) return;
       data = apply(data, getId(), el.value);
-      emit(kind, { categoryId: getId(), field });
+      // baseRev：輸入框目前顯示內容的版本（小組共作用來判斷編輯是基於哪個版本）
+      emit(kind, { categoryId: getId(), field, baseRev: el._rev ?? null });
     };
     el.addEventListener('compositionstart', () => { composing = true; });
     el.addEventListener('compositionend', () => { composing = false; push(field === 'name' ? 'rename' : 'reason'); });
@@ -342,7 +343,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
       if (!b) { b = makeBox(cat); boxes.set(cat.id, b); }
       const inCat = M.cardsIn(data, cards, cat.id);
       const nameLocked = locks.has('name:' + cat.id);
-      if (document.activeElement !== b.input || nameLocked) b.input.value = cat.name;
+      if (document.activeElement !== b.input || nameLocked) { b.input.value = cat.name; b.input._rev = cat.nameRev; }
       b.input.placeholder = M.tempName(cat);
       b.input.hidden = ro;
       b.input.readOnly = nameLocked;
@@ -353,7 +354,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
       b.nameText.classList.toggle('temp', M.isTempName(cat.name));
       if (b.reason) {
         const rLocked = locks.has('reason:' + cat.id);
-        if (document.activeElement !== b.reason || rLocked) b.reason.value = cat.reason || '';
+        if (document.activeElement !== b.reason || rLocked) { b.reason.value = cat.reason || ''; b.reason._rev = cat.reasonRev; }
         b.reason.hidden = ro;
         b.reason.readOnly = rLocked;
         b.reason.classList.toggle('bd-field-locked', rLocked);
@@ -395,7 +396,8 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
       // 手指按在把手上時（含尚未開始拖曳）延後套用，避免重畫把手造成放開事件遺失
       if (drag) { pendingData = next; return; }
       if (M.sameBoard(next, data) && next.categories.every((c, i) => c.name === data.categories[i]?.name
-          && (c.reason ?? '') === (data.categories[i]?.reason ?? ''))) return;
+          && (c.reason ?? '') === (data.categories[i]?.reason ?? '')
+          && c.nameRev === data.categories[i]?.nameRev && c.reasonRev === data.categories[i]?.reasonRev)) return;
       data = next;
       if (selected && !cards.some((c) => c.id === selected)) selected = null;
       render();

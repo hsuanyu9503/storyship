@@ -191,4 +191,42 @@ A_T=$(echo "$A_OUT" | grep -o '20[0-9-]* [0-9:.]*' | tail -1); B_T=$(echo "$B_OU
 if [ "$(q "select name from public.group_categories where id = 'cccccccc-0000-4000-8000-000000000009'")" = "移出前送出" ]; then
   [ "$(q "select '$B_T'::timestamptz > '$A_T'::timestamptz")" = "t" ] || fail "情境 9（F4）教師移出先完成，A 之後仍寫入（A=$A_T 教師=$B_T）"
 fi
-echo "ok - 情境 9（複檢 F4）：移出與進行中的編輯不會交錯"
+echo "$B_OUT" | grep -qi "error" && fail "情境 9 教師移出失敗：$B_OUT"
+[ "$(q "select status from public.participants where id = '$PA'")" = "removed" ] || fail "情境 9 學生沒有被移出"
+echo "ok - 情境 9（複檢 F4）：移出與進行中的編輯不會交錯（教師移出成功、學生狀態為 removed）"
+
+# ---------- 11（第二輪複檢：F4 反方向）：教師換組進行中 → 學生之後送出的編輯 ----------
+# 教師先在交易中完成換組並停頓；學生送出修改原組分類的請求，必須等待教師完成，之後以新組別處理（原組分類不存在 → NOT_FOUND）
+S=$(setup)
+q "set role anon; select public.group_add_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000011')" >/dev/null
+PA=$(q "select id from public.participants where session_id = '$S' and token_hash = encode(sha256(convert_to('$TA','UTF8')),'hex')")
+( { echo "begin;"; echo "$TEACH"; echo "select public.teacher_move_participant('$PA', 2); select pg_sleep(1.5); commit;"; } | psql_ -d "$DB" > "$HERE/.r11b" 2>&1 ) &
+sleep 0.5
+timed "psql_ -d '$DB' -c \"set role anon\" -c \"select public.group_update_category('$S', '$TA', 'cccccccc-0000-4000-8000-000000000011', 'name', '換組後送出', 1)->>'code'\""
+wait
+B_OUT=$(cat "$HERE/.r11b"); rm -f "$HERE/.r11b"
+echo "$B_OUT" | grep -qi "error" && fail "情境 11 教師換組失敗：$B_OUT"
+[ "$WAITED" -ge 900 ] || fail "情境 11 學生沒有等待教師的換組交易（$WAITED ms）"
+echo "$OUT" | grep -q "NOT_FOUND" || fail "情境 11 換組後的請求沒有以新組別處理：$OUT"
+[ "$(q "select name from public.group_categories where id = 'cccccccc-0000-4000-8000-000000000011'")" = "" ] || fail "情境 11 原組分類被換組後的請求修改"
+echo "ok - 情境 11（第二輪複檢：F4 反方向）：教師換組進行中 → 學生請求等待 ${WAITED} ms，之後以新組別處理（NOT_FOUND），原組未被修改"
+
+# ---------- 10（第二輪複檢 D1）：學生加入 vs. 教師刪除場次 ----------
+# 測試專用停頓點：在拋棄式資料庫的 participants 加上 BEFORE INSERT 觸發器（只有設定 test.join_sleep 的連線會停頓），
+# 讓 student_join 停在「已鎖住小組、尚未插入學生」之間；教師在這時刪除場次。修正前兩者互等 → 死結。
+q "create or replace function public.t_join_barrier() returns trigger language plpgsql as \$\$
+   begin perform pg_sleep(coalesce(nullif(current_setting('test.join_sleep', true), ''), '0')::float); return new; end \$\$;
+   drop trigger if exists t_join_barrier on public.participants;
+   create trigger t_join_barrier before insert on public.participants for each row execute function public.t_join_barrier();" >/dev/null
+S=$(setup)
+CODE=$(q "select join_code from public.sessions where id = '$S'")
+TJ=$(printf 'd%.0s' {1..40})
+( psql_ -d "$DB" -c "set test.join_sleep = '1.5'" -c "set role anon" -c "select public.student_join('$CODE', '$TJ', 1)->>'session_id'" > "$HERE/.r10a" 2>&1 ) &
+sleep 0.5
+( psql_ -d "$DB" -c "$TEACH" -c "select public.teacher_delete_session('$S')" > "$HERE/.r10b" 2>&1 ) &
+wait
+R="$(cat "$HERE/.r10a" "$HERE/.r10b")"; rm -f "$HERE/.r10a" "$HERE/.r10b"
+q "drop trigger if exists t_join_barrier on public.participants" >/dev/null
+echo "$R" | grep -qi "deadlock" && fail "情境 10（D1）學生加入與刪除場次發生死結：$(echo "$R" | grep -i deadlock | head -1)"
+[ -z "$(q "select 1 from public.sessions where id = '$S'")" ] || fail "情境 10 刪除場次沒有完成：$R"
+echo "ok - 情境 10（第二輪複檢 D1）：學生加入停在鎖住小組之後，教師刪除場次 → 無死結，刪除完成"

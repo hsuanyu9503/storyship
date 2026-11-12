@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 故事找朋友｜升級後檢查（唯讀，可隨時執行；不修改任何資料）
--- 在 Supabase SQL Editor 執行後，每一列（14 列）的 ok 都應為 true。
+-- 在 Supabase SQL Editor 執行後，每一列（15 列）的 ok 都應為 true。
 -- =====================================================================
 with
 tables as (
@@ -62,4 +62,7 @@ select '13. 小組故事歸屬沒有指向其他組的分類',
                     where gc.group_id <> gp.group_id)
 union all
 select '14. 個人分類結束標記欄位存在', exists (select 1 from information_schema.columns
-        where table_schema = 'public' and table_name = 'session_state' and column_name = 'personal_closed_at');
+        where table_schema = 'public' and table_name = 'session_state' and column_name = 'personal_closed_at')
+union all
+select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev');
