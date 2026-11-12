@@ -15,6 +15,7 @@
 //     操作分為「從未送出（可合併最新文字）」與「已送出過（內容固定，只能重送原樣）」，後續輸入一律成為接續的新操作。
 //   * 刪除分類後立刻移動其中的故事：移動接在刪除之後，以刪除回傳的新版本為基準（第二輪複檢 R3）。
 //   * 操作鎖的取得、續約、釋放全部依序送出（同一裝置一次一個），不會有較早的取得請求晚到而留下幽靈鎖（第二輪複檢 R4）。
+//     每次取得有世代編號；釋放只對應它當時的那一次取得：之後又重新取得同一目標時，舊的釋放作廢（第三輪複檢 N1）。
 //   * 重送安全：新增分類帶前端產生的 id（重送不會產生第二個、也不會重建已刪除的分類）；
 //     移動／改字若伺服器已是相同結果，回傳成功但不重複寫入；刪除已不存在的分類視為完成。
 //   * 即時通知（Realtime）只用來加速；收不到時每 2 秒輪詢一次。
@@ -140,9 +141,13 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
     // 較舊的回應：忽略（畫面不回溯）。三個版本來自同一個資料快照，較新的快照沒有任何一個會變小
     if (!first && server && (b.board_rev < server.board_rev || (b.lock_rev ?? 0) < server.lock_rev
         || (b.state_rev ?? 0) < server.state_rev)) return;
+    // 三個版本都相同時（例如只有操作鎖逾時）：以讀取交易的時間 read_now 排序。
+    // 它與伺服器過濾逾時鎖所用的 now() 是同一個值，因此鎖清單與 read_now 一致（第三輪複檢 D2 邊界）
+    if (!first && server && b.board_rev === server.board_rev && (b.lock_rev ?? 0) === server.lock_rev
+        && (b.state_rev ?? 0) === server.state_rev && (b.read_now ?? 0) < server.read_now) return;
     const cats = new Map(b.categories.map((c) => [c.id, c]));
     const place = new Map(b.placements.map((p) => [p.card_id, { cat: p.category_id, rev: p.rev }]));
-    server = { board_rev: b.board_rev, lock_rev: b.lock_rev ?? 0, state_rev: b.state_rev ?? 0, status: b.status,
+    server = { board_rev: b.board_rev, lock_rev: b.lock_rev ?? 0, state_rev: b.state_rev ?? 0, read_now: b.read_now ?? 0, status: b.status,
                can_edit: b.can_edit, paused: b.paused, phase: b.phase, cats, place, locks: b.locks || [], problems: b.problems };
     // 伺服器已確認的文字：清除對應的本機暫存（欄位仍在輸入中的除外）
     for (const [key, v] of texts) {
@@ -370,6 +375,8 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
         p_expected_rev: op.base });
     }
     if (op.type === 'release') {
+      // 之後又重新取得了同一目標：這個釋放已過時，不送出（否則會解除新的鎖；每次重送都重新判斷）
+      if (intent.target === op.target && intent.gen !== op.gen) return { ok: true, superseded: true };
       // 排在這台裝置所有先前的取得／續約之後送出（依序），不會比取得先到
       return lockCall(op.target, true).then((r) => r || { ok: true }).catch((e) => { if (e.code === 'NETWORK') throw e; return { ok: true }; });
     }
@@ -408,7 +415,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
       // 成功時伺服器已釋放；失敗時主動釋放。不可繼續續約，否則會一直鎖住這張卡。
       if (held === 'card:' + op.cardId) {
         holdRelease();
-        if (!r.ok || r.unchanged) queue.push({ type: 'release', target: 'card:' + op.cardId });
+        if (!r.ok || r.unchanged) queue.push({ type: 'release', target: 'card:' + op.cardId, gen: intent.gen });
       }
       // 只讓版本往前：已讀到更新的位置時，不被這個較舊的回應覆寫（複檢 F5）
       const known = server.place.get(op.cardId)?.rev ?? 0;
@@ -477,6 +484,8 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   // 這台裝置所有 group_lock 請求（取得、續約、釋放）依序送出：前一個完成才送下一個。
   // shouldRun：輪到它時才判斷是否仍需要（例如已離開欄位的取得、已釋放的續約就不送）
   let lockSeq = Promise.resolve();
+  let lockGen = 0;
+  let intent = { target: null, gen: 0 };   // 最近一次「要取得」的目標與世代
   function lockCall(target, isRelease, shouldRun = () => true) {
     const p = lockSeq.then(() => (shouldRun()
       ? rpc(client, 'group_lock', { p_session: sessionId, p_token: token, p_target: target, p_release: isRelease })
@@ -488,6 +497,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   async function lock(target) {
     holdRelease();
     held = target;
+    intent = { target, gen: ++lockGen };
     try {
       const r = await lockCall(target, false, () => held === target);
       if (!r) return false;                 // 輪到時已不需要（學生已離開）：沒有送出
@@ -515,7 +525,7 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
   }
   function release(target) {
     if (held === target) holdRelease();
-    queue.push({ type: 'release', target });
+    queue.push({ type: 'release', target, gen: intent.target === target ? intent.gen : 0 });
     pump();
   }
 

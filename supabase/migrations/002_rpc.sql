@@ -23,6 +23,8 @@ alter table public.session_state add column if not exists personal_closed_at tim
 -- 小組操作鎖的版本（取得新鎖、釋放鎖時 +1）。與 board_rev、session_state.rev 一起讓前端判斷回應新舊：
 -- 同一個資料快照讀出的三個版本彼此一致，較新的快照三者都不會變小（第二輪複檢 D2：不用時鐘時間排序）
 alter table public.groups add column if not exists lock_rev bigint not null default 0;
+-- 刪除分類的結果（回到未分類的故事與其新版本）：刪除已完成但回應遺失時，重送可以取回同一份結果（第三輪複檢 N2）
+alter table public.group_category_tombstones add column if not exists result jsonb;
 
 -- =====================================================================
 -- 鎖定協定（Phase 3 複檢後整理；所有寫入路徑都遵守）
@@ -660,6 +662,8 @@ begin
     'group_id', g.id, 'group_number', g.number, 'group_name', g.name, 'status', g.status, 'board_rev', g.board_rev,
     -- 回應新舊的判斷依據（與資料同一快照）：board_rev（小組內容）、lock_rev（操作鎖）、state_rev（環節／暫停）
     'lock_rev', g.lock_rev, 'state_rev', st.rev,
+    -- 讀取交易的時間（now()＝交易開始時間，與下方過濾逾時鎖的 now() 相同）：三個版本都相同時用來排序
+    'read_now', extract(epoch from now()),
     'paused', st.editing_paused, 'phase', st.phase,
     'can_edit', s.status = 'active' and st.phase = '04' and not st.editing_paused and g.status = 'open',
     'problems', app.group_problems(g.id),
@@ -778,6 +782,12 @@ declare c record; v_cards jsonb;
 begin
   select * into c from app.group_edit_ctx(p_session, p_token);
   if not exists (select 1 from public.group_categories where id = p_category and group_id = c.group_id) then
+    -- 同一個刪除的重送（第一次已完成、回應遺失）：回傳第一次的結果，讓接續的操作有正確的基準版本
+    select result into v_cards from public.group_category_tombstones where category_id = p_category and group_id = c.group_id;
+    if found then
+      return jsonb_build_object('ok', true, 'duplicate', true, 'cards', coalesce(v_cards -> 'cards', '[]'::jsonb),
+                                'board_rev', (select board_rev from public.groups where id = c.group_id));
+    end if;
     return jsonb_build_object('ok', false, 'code', 'NOT_FOUND');
   end if;
   -- 其他組員正在編輯此分類的文字，或正在拖曳其中的故事 → 拒絕
@@ -795,7 +805,8 @@ begin
   delete from public.group_locks where group_id = c.group_id
      and target in ('name:' || p_category, 'reason:' || p_category);
   delete from public.group_categories where id = p_category;
-  insert into public.group_category_tombstones (category_id, group_id) values (p_category, c.group_id)
+  insert into public.group_category_tombstones (category_id, group_id, result)
+  values (p_category, c.group_id, jsonb_build_object('cards', v_cards))
   on conflict (category_id) do nothing;
   return jsonb_build_object('ok', true, 'cards', v_cards, 'board_rev', app.bump_board(c.group_id));
 end $$;

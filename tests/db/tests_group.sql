@@ -108,6 +108,9 @@ select t.ok((public.student_group_board(:'gs', :'u1a')->>'lock_rev')::bigint = :
 select t.ok((public.student_group_board(:'gs', :'u1a')->>'state_rev') is not null, '第二輪複檢 D2：回應含 state_rev（環節／暫停的版本）');
 select t.ok((public.group_delete_category(:'gs', :'u1a', :'gc3')->>'ok')::boolean, 'P3：刪除分類 3');
 select t.ok((public.group_move_card(:'gs', :'u1c', :'gcard_b', :'gc3', 0)->>'code') = 'NOT_FOUND', 'P3：移到已刪除的分類被拒絕');
+select t.ok((public.group_delete_category(:'gs', :'u1a', :'gc3')->>'duplicate')::boolean
+            and jsonb_typeof(public.group_delete_category(:'gs', :'u1a', :'gc3')->'cards') = 'array', '第三輪複檢 N2：刪除的重送回傳第一次的結果（含故事版本）');
+select t.ok((public.group_delete_category(:'gs', :'u2a', :'gc3')->>'code') = 'NOT_FOUND', '第三輪複檢 N2：其他組不能取得此組的刪除結果');
 select t.ok((public.group_update_category(:'gs', :'u1c', :'gc3', 'name', '復活', 1)->>'code') = 'NOT_FOUND', 'P3：修改已刪除的分類被拒絕');
 reset role;
 select t.ok(not exists (select 1 from public.group_placements where card_id = :'gcard_b' and category_id is not null), 'P3：故事沒有被放到不存在的分類');
