@@ -114,7 +114,11 @@ grant execute on function
   public.teacher_purge_expired(),
   public.teacher_unlock_group(uuid),
   public.teacher_move_participant(uuid, int),
-  public.teacher_remove_participant(uuid)
+  public.teacher_remove_participant(uuid),
+  public.teacher_preview_compare(uuid, jsonb),
+  public.teacher_preview_match(uuid, jsonb),
+  public.teacher_publish_compare(uuid, jsonb, bigint),
+  public.teacher_publish_match(uuid, jsonb, bigint)
 to authenticated;
 
 -- 之後新增的函式預設不開放

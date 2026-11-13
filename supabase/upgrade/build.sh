@@ -10,7 +10,7 @@ OUT=${1:-upgrade/upgrade.sql}
   echo "-- 由 supabase/upgrade/build.sh 產生，請勿手動修改。內容：002_rpc.sql → 003_security.sql → checks/verify.sql"
   echo "-- 002、003 包在單一交易中：執行中任何錯誤都會全部回復，資料庫維持升級前的狀態。"
   echo "-- 最後的檢查在 commit 之後執行（唯讀）：若出現 false，升級本身已完成，不會自動回復；請依說明處理後重新執行本檔。"
-  echo "-- 不刪除、不修改任何既有資料。執行完畢後，結果表格的 ok 都應為 true。"
+  echo "-- 不刪除、不修改任何既有資料。執行完畢後，結果表格的 ok 都應為 true（17 列）。"
   echo "-- ====================================================================="
   echo "begin;"
   echo

@@ -82,6 +82,7 @@ python3 -m http.server 8080
    會顯示未完成人數，確認後所有個人分類鎖定並保存快照（之後返回 03 也不會解鎖）。
    04 小組共作：主控台顯示六組的已分類、分類數、理由完成與狀態；「查看」可看單組成果（不投影）；
    已提交的組可「重新開放」；「結束共同分類」時列出各組狀態，確認後未提交的組保存目前成果並停止編輯。
+   05／07：所有選擇只改變教師端「預覽」，按「公開到投影」後全班才看到（步驟見 `PHASE4.md` 第八節）。
 6. 下課時按「結束場次」：學生不能再修改，所有成果保留。
 
 ### 常見狀況
@@ -137,7 +138,13 @@ python3 -m http.server 8080
 
 在 SQL Editor 貼上並執行 **`supabase/upgrade/upgrade.sql`** 一個檔案即可（內容＝002 → 003，包在單一交易中，最後自動執行檢查）。
 執行中任何錯誤都會全部回復，不會留下半套狀態；可重複執行；不刪除、不修改任何既有資料。
-結果表格的 `ok` 都應為 `true`（15 列）。檢查在 commit 之後執行：若出現 `false`，升級已完成、不會自動回復，請處理後重新執行。修改 002／003 之後，請執行 `bash supabase/upgrade/build.sh` 重新產生此檔。
+結果表格的 `ok` 都應為 `true`（17 列）。檢查在 commit 之後執行：若出現 `false`，升級已完成、不會自動回復，請處理後重新執行。修改 002／003 之後，請執行 `bash supabase/upgrade/build.sh` 重新產生此檔。
+
+### 從 Phase 3 升級到 Phase 4
+
+同樣執行 **`supabase/upgrade/upgrade.sql`** 一次（17 列都應為 `true`），再把網站合併到 `main`，所有裝置重新整理。
+新增欄位 `session_state.stage_ctl`、`session_state.disclosure`（`add column if not exists`），不修改既有資料或快照。
+退回 Phase 3：Phase 3 版本（`89299af`）的 002 → 003 → `supabase/rollback/phase4_to_phase3.sql`。詳見 [`PHASE4.md`](PHASE4.md)。
 
 ### 從 Phase 2 升級到 Phase 3（已部署 Phase 2 的資料庫）
 

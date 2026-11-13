@@ -3,7 +3,7 @@
 -- 由 supabase/upgrade/build.sh 產生，請勿手動修改。內容：002_rpc.sql → 003_security.sql → checks/verify.sql
 -- 002、003 包在單一交易中：執行中任何錯誤都會全部回復，資料庫維持升級前的狀態。
 -- 最後的檢查在 commit 之後執行（唯讀）：若出現 false，升級本身已完成，不會自動回復；請依說明處理後重新執行本檔。
--- 不刪除、不修改任何既有資料。執行完畢後，結果表格的 ok 都應為 true。
+-- 不刪除、不修改任何既有資料。執行完畢後，結果表格的 ok 都應為 true（17 列）。
 -- =====================================================================
 begin;
 
@@ -34,6 +34,14 @@ alter table public.session_state add column if not exists personal_closed_at tim
 alter table public.groups add column if not exists lock_rev bigint not null default 0;
 -- 刪除分類的結果（回到未分類的故事與其新版本）：刪除已完成但回應遺失時，重送可以取回同一份結果（第三輪複檢 N2）
 alter table public.group_category_tombstones add column if not exists result jsonb;
+
+-- ---------------------------------------------------------------------
+-- Phase 4 新增欄位（可重複執行）
+--   stage_ctl：教師在 05／07 最後「公開」的選擇（綁定 snapshot ID），只有教師可讀；返回該環節或換裝置時由伺服器重建投影
+--   disclosure：跨環節保存的揭露紀錄 {"revealed":{"<類型索引>":[已公開的要素索引]}}（見 app.disc_map）；進入 07 不會無條件公開全部
+-- ---------------------------------------------------------------------
+alter table public.session_state add column if not exists stage_ctl jsonb not null default '{}'::jsonb;
+alter table public.session_state add column if not exists disclosure jsonb not null default '{}'::jsonb;
 
 -- =====================================================================
 -- 鎖定協定（Phase 3 複檢後整理；所有寫入路徑都遵守）
@@ -142,7 +150,7 @@ end $$;
 create or replace function public.teacher_set_stage(p_session uuid, p_phase text, p_sub text,
   p_projection jsonb, p_expected_rev bigint, p_lock_unsubmitted boolean default false)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
-declare s public.sessions; st public.session_state; v_open int[]; g record;
+declare s public.sessions; st public.session_state; v_open int[]; g record; v_proj jsonb;
 begin
   -- 版本號不可為 null（null 會讓「版本不符」的比較失效而略過檢查）
   if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
@@ -152,6 +160,8 @@ begin
   if p_projection is null or jsonb_typeof(p_projection) <> 'object' or octet_length(p_projection::text) > 100000 then
     raise exception 'BAD_DATA';
   end if;
+  -- 05／07 的成果畫面只能由伺服器依白名單產生（teacher_publish_compare／teacher_publish_match），不接受前端組好的內容
+  if p_projection ->> 'screen' in ('compare', 'match') then raise exception 'BAD_DATA'; end if;
   select * into st from public.session_state where session_id = p_session for update;
   if st.rev <> p_expected_rev then
     return jsonb_build_object('ok', false, 'code', 'STALE', 'rev', st.rev);
@@ -180,8 +190,20 @@ begin
      where gl.group_id = gg.id and gg.session_id = p_session;
   end if;
 
+  -- 返回 05／07：若教師曾公開過，依當時綁定的快照重建（不會改抓最新快照，也不靠教師瀏覽器的記憶）
+  v_proj := p_projection;
+  if p_phase = '05' and st.stage_ctl ? '05' then v_proj := (app.compare_build(p_session, st.stage_ctl -> '05')) -> 'projection'; end if;
+  if p_phase = '07' and st.stage_ctl ? '07' then v_proj := (app.match_build(p_session, st.stage_ctl -> '07')) -> 'projection'; end if;
+  -- 06：揭露紀錄跨環節保存（只增加）；投影由伺服器依紀錄產生（見 app.genre_build）
+  st.disclosure := app.disc_from_legacy(p_session, st.disclosure, st.projection);
+  if p_projection ->> 'screen' = 'genre' then
+    v_proj := app.genre_build(p_session, p_projection, st.disclosure);
+    st.disclosure := v_proj -> 'disclosure';
+    v_proj := v_proj -> 'projection';
+  end if;
+
   update public.session_state
-     set phase = p_phase, sub = p_sub, projection = p_projection, rev = rev + 1, updated_at = now()
+     set phase = p_phase, sub = p_sub, projection = v_proj, disclosure = st.disclosure, rev = rev + 1, updated_at = now()
    where session_id = p_session
   returning * into st;
   return jsonb_build_object('ok', true, 'rev', st.rev);
@@ -893,6 +915,429 @@ begin
   return jsonb_build_object('ok', true, 'board_rev', app.bump_board(c.group_id));
 end $$;
 
+
+-- =====================================================================
+-- Phase 4：05 分類成果大公開、07 小小故事分類師
+--
+-- 原則
+--   * 成果一律來自已保存的 group_snapshots（不讀仍可變動的 group_categories／group_placements），
+--     每次預覽與公開都明確綁定 snapshot ID；伺服器不會自動改抓「最新快照」。
+--   * 投影資料由伺服器依白名單產生：只有教師已揭露的理由、要素才會出現在回傳的 JSON 中；
+--     不含任何 ID、未揭露的文字或教師補充資料。
+--   * 預覽（teacher_preview_*）與公開（teacher_publish_*）使用同一個產生函式，預覽只讀不寫。
+--   * 公開以 session_state.rev 做版本檢查；過期的請求回傳 STALE，不覆蓋較新的公開內容。
+--   * 這些函式只讀取快照與素材，從不修改個人資料、小組資料或任何快照。
+-- =====================================================================
+
+-- 教師身分＋場次擁有者（只讀，不鎖定；給預覽與產生函式使用）
+create or replace function app.teacher_session_ro(p_session uuid) returns public.sessions
+language plpgsql stable security definer set search_path = public, pg_temp as $$
+declare s public.sessions;
+begin
+  perform app.require_teacher();
+  select * into s from public.sessions where id = p_session;
+  if not found then raise exception 'SESSION_NOT_FOUND'; end if;
+  if s.teacher_id <> auth.uid() then raise exception 'FORBIDDEN'; end if;
+  return s;
+end $$;
+
+-- 快照內容正規化（相容兩種格式）：
+--   Phase 3 起：{"categories":[{id,order,label_no,name,reason,cards}],"placements":[...],"unplaced":[...]}
+--   Phase 1／2：{"categories":[{id,label_no,name,reason,name_rev,reason_rev}],"placements":[{card_id,category_id,rev}]}
+-- 一律以 placements 決定歸屬（兩種格式都有）；只保留有故事的分類；故事依素材順序；不修改原快照。
+create or replace function app.snapshot_norm(p_data jsonb, p_set uuid) returns jsonb
+language sql stable security definer set search_path = public, pg_temp as $$
+  with cards as (select sc.id::text id, sc.sort_order, sc.slug from public.story_cards sc where sc.content_set_id = p_set),
+       pl as (select p ->> 'card_id' card, p ->> 'category_id' cat
+                from jsonb_array_elements(case when jsonb_typeof(p_data -> 'placements') = 'array' then p_data -> 'placements' else '[]'::jsonb end) p),
+       cats as (select c ->> 'id' id, nullif(c ->> 'order', '')::int ord, coalesce(nullif(c ->> 'label_no', '')::int, 0) label_no,
+                       btrim(coalesce(c ->> 'name', '')) name, btrim(coalesce(c ->> 'reason', '')) reason
+                  from jsonb_array_elements(case when jsonb_typeof(p_data -> 'categories') = 'array' then p_data -> 'categories' else '[]'::jsonb end) c),
+       used as (select cats.*, row_number() over (order by coalesce(cats.ord, 2147483647), cats.label_no, cats.id) n
+                  from cats where exists (select 1 from pl join cards on cards.id = pl.card where pl.cat = cats.id))
+  select jsonb_build_object(
+    'categories', coalesce((select jsonb_agg(jsonb_build_object('id', u.id, 'n', u.n, 'label_no', u.label_no, 'name', u.name, 'reason', u.reason,
+        'cards', (select jsonb_agg(cards.id order by cards.sort_order, cards.slug) from pl join cards on cards.id = pl.card where pl.cat = u.id))
+        order by u.n) from used u), '[]'::jsonb),
+    'unplaced', coalesce((select jsonb_agg(cards.id order by cards.sort_order, cards.slug) from cards
+        where not exists (select 1 from pl join used on used.id = pl.cat where pl.card = cards.id)), '[]'::jsonb));
+$$;
+
+-- 取得本場次的一份快照（必須屬於這個場次），回傳正規化內容與組別資訊
+create or replace function app.snapshot_for(p_session uuid, p_snapshot uuid) returns jsonb
+language plpgsql stable security definer set search_path = public, pg_temp as $$
+declare sn public.group_snapshots; g public.groups; v_set uuid;
+begin
+  select * into sn from public.group_snapshots where id = p_snapshot and session_id = p_session;
+  if not found then raise exception 'BAD_DATA'; end if;     -- 不存在或屬於其他場次
+  select * into g from public.groups where id = sn.group_id and session_id = p_session;
+  if not found then raise exception 'BAD_DATA'; end if;
+  select content_set_id into v_set from public.sessions where id = p_session;
+  return jsonb_build_object('group_id', g.id, 'number', g.number, 'name', g.name, 'kind', sn.kind,
+                            'complete', sn.is_complete, 'norm', app.snapshot_norm(sn.data, v_set));
+end $$;
+
+-- 分類的顯示名稱：暫時名稱「分類 N」視為未命名
+create or replace function app.cat_label(p_cat jsonb) returns jsonb
+language sql immutable as $$
+  select case when app.is_temp_name(p_cat ->> 'name')
+              then jsonb_build_object('label', '分類 ' || coalesce(nullif(p_cat ->> 'label_no', '0'), p_cat ->> 'n'), 'unnamed', true)
+              else jsonb_build_object('label', p_cat ->> 'name', 'unnamed', false) end;
+$$;
+
+-- 故事的公開資訊（只有名稱與圖片）
+create or replace function app.card_pub(p_set uuid, p_ids jsonb, p_track text) returns jsonb
+language sql stable security definer set search_path = public, pg_temp as $$
+  select coalesce(jsonb_agg(jsonb_build_object('title', sc.title, 'image_url', sc.image_url,
+                                               'tracked', p_track is not null and sc.id::text = p_track)
+                            order by sc.sort_order, sc.slug), '[]'::jsonb)
+    from public.story_cards sc
+   where sc.content_set_id = p_set and sc.id::text in (select jsonb_array_elements_text(coalesce(p_ids, '[]'::jsonb)));
+$$;
+
+-- 驗證：字串陣列中的每個 ID 都必須在允許清單中
+create or replace function app.ids_subset(p_ids jsonb, p_allowed jsonb) returns boolean
+language sql immutable as $$
+  select p_ids is null or jsonb_typeof(p_ids) = 'null'
+      or (jsonb_typeof(p_ids) = 'array' and not exists (
+            select 1 from jsonb_array_elements(p_ids) x
+             where jsonb_typeof(x) <> 'string' or not (p_allowed @> jsonb_build_array(x))));
+$$;
+
+create or replace function app.uuid_or_null(p jsonb) returns uuid
+language plpgsql immutable as $$
+begin
+  if p is null or jsonb_typeof(p) = 'null' then return null; end if;
+  if jsonb_typeof(p) <> 'string' or (p #>> '{}') !~ '^[0-9a-f-]{36}$' then raise exception 'BAD_DATA'; end if;
+  return (p #>> '{}')::uuid;
+end $$;
+
+-- ---------- 05：雙組比較 ----------
+-- ctl = {"left": snapshot|null, "right": snapshot|null, "story": 故事|null,
+--        "reasons": {"left":[分類 id], "right":[分類 id]}, "page": {"left":0,"right":0}, "focus": {"left": 分類 id|null, "right": …},
+--        "per": {"left": 4|2|1, "right": 4|2|1},   每頁分類數（教師控制；理由長時改為 2 或 1，不縮小字級）
+--        "zoom": null|"left"|"right"}               放大單側：投影只顯示該側、使用整個畫面寬度（另一側不放進投影資料）
+-- 回傳 {"ctl": 正規化後的選擇, "projection": 投影資料（白名單）}
+create or replace function app.compare_build(p_session uuid, p_ctl jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public, pg_temp as $$
+declare
+  v_set uuid; v_story uuid; v_track text; side text; snap uuid; d jsonb; cats jsonb; cat jsonb;
+  rev_ids jsonb; foc text; pg int; pages int; per int; shown jsonb; out_cats jsonb;
+  sides jsonb := '[]'::jsonb; ctl jsonb; groups uuid[] := '{}'; track jsonb; v_story_title text;
+begin
+  if p_ctl is null or jsonb_typeof(p_ctl) <> 'object' then raise exception 'BAD_DATA'; end if;
+  select content_set_id into v_set from public.sessions where id = p_session;
+  v_story := app.uuid_or_null(p_ctl -> 'story');
+  if v_story is not null then
+    select title into v_story_title from public.story_cards where id = v_story and content_set_id = v_set;
+    if not found then raise exception 'BAD_DATA'; end if;
+  end if;
+  v_track := v_story::text;
+  ctl := jsonb_build_object('left', null, 'right', null, 'story', v_story,
+                            'reasons', jsonb_build_object('left', '[]'::jsonb, 'right', '[]'::jsonb),
+                            'page', jsonb_build_object('left', 0, 'right', 0),
+                            'focus', jsonb_build_object('left', null, 'right', null),
+                            'per', jsonb_build_object('left', 4, 'right', 4), 'zoom', null);
+  foreach side in array array['left', 'right'] loop
+    snap := app.uuid_or_null(p_ctl -> side);
+    continue when snap is null;
+    d := app.snapshot_for(p_session, snap);
+    if (d ->> 'group_id')::uuid = any(groups) then raise exception 'SAME_GROUP'; end if;   -- 兩側不能是同一組
+    groups := groups || (d ->> 'group_id')::uuid;
+    cats := d -> 'norm' -> 'categories';
+    rev_ids := coalesce(p_ctl -> 'reasons' -> side, '[]'::jsonb);
+    if not app.ids_subset(rev_ids, coalesce((select jsonb_agg(c -> 'id') from jsonb_array_elements(cats) c), '[]'::jsonb)) then
+      raise exception 'BAD_DATA';
+    end if;
+    foc := nullif(p_ctl -> 'focus' ->> side, '');
+    if foc is not null and not exists (select 1 from jsonb_array_elements(cats) c where c ->> 'id' = foc) then raise exception 'BAD_DATA'; end if;
+    per := coalesce(nullif(p_ctl -> 'per' ->> side, '')::int, 4);
+    if per not in (1, 2, 4) then raise exception 'BAD_DATA'; end if;
+    pages := greatest(1, ceil(jsonb_array_length(cats)::numeric / per)::int);
+    pg := coalesce(nullif(p_ctl -> 'page' ->> side, '')::int, 0);
+    if pg < 0 or pg >= pages then raise exception 'BAD_DATA'; end if;
+    -- 這一頁（或聚焦的那一個）要顯示的分類
+    select coalesce(jsonb_agg(c order by (c ->> 'n')::int), '[]'::jsonb) into shown from jsonb_array_elements(cats) c
+     where (foc is not null and c ->> 'id' = foc)
+        or (foc is null and (c ->> 'n')::int > pg * per and (c ->> 'n')::int <= (pg + 1) * per);
+    select coalesce(jsonb_agg(app.cat_label(c) || jsonb_build_object(
+             'cards', app.card_pub(v_set, c -> 'cards', v_track),
+             -- 理由：只有教師揭露的才放進資料；其餘一律只標示 hidden（不含內容，也不透露是否為空）
+             'reason_state', case when rev_ids @> jsonb_build_array(c -> 'id')
+                                  then case when coalesce(c ->> 'reason', '') = '' then 'empty' else 'shown' end else 'hidden' end)
+           || case when rev_ids @> jsonb_build_array(c -> 'id') and coalesce(c ->> 'reason', '') <> ''
+                   then jsonb_build_object('reason', c ->> 'reason') else '{}'::jsonb end
+           order by (c ->> 'n')::int), '[]'::jsonb) into out_cats from jsonb_array_elements(shown) c;
+    -- 指定故事在這一組的位置
+    track := null;
+    if v_track is not null then
+      select app.cat_label(c) into track from jsonb_array_elements(cats) c where c -> 'cards' @> jsonb_build_array(v_track) limit 1;
+      track := case when track is null then jsonb_build_object('where', null, 'unplaced', true)
+                    else jsonb_build_object('where', track ->> 'label', 'unplaced', false) end;
+    end if;
+    sides := sides || jsonb_build_array(jsonb_build_object(
+      'side', side, 'group', d ->> 'name', 'number', (d ->> 'number')::int,
+      'kind', d ->> 'kind', 'complete', (d ->> 'complete')::boolean,
+      'total', jsonb_array_length(cats), 'page', pg, 'pages', pages, 'per', per, 'focus', foc is not null,
+      'categories', out_cats, 'unplaced_count', jsonb_array_length(d -> 'norm' -> 'unplaced'), 'track', track));
+    ctl := jsonb_set(jsonb_set(jsonb_set(jsonb_set(ctl, array[side], to_jsonb(snap)),
+             array['reasons', side], coalesce(rev_ids, '[]'::jsonb)), array['page', side], to_jsonb(pg)),
+             array['focus', side], coalesce(to_jsonb(foc), 'null'::jsonb));
+    ctl := jsonb_set(ctl, array['per', side], to_jsonb(per));
+  end loop;
+  -- 放大單側：只保留該側（必須已選）
+  if p_ctl ? 'zoom' and jsonb_typeof(p_ctl -> 'zoom') <> 'null' then
+    if p_ctl ->> 'zoom' not in ('left', 'right') or jsonb_typeof(ctl -> (p_ctl ->> 'zoom')) = 'null' then raise exception 'BAD_DATA'; end if;
+    ctl := jsonb_set(ctl, '{zoom}', p_ctl -> 'zoom');
+    select coalesce(jsonb_agg(x), '[]'::jsonb) into sides from jsonb_array_elements(sides) x where x ->> 'side' = p_ctl ->> 'zoom';
+  end if;
+  return jsonb_build_object('ctl', ctl, 'projection', jsonb_build_object(
+    'screen', 'compare', 'title', '分類成果大公開',
+    'story', case when v_story is null then null else jsonb_build_object('title', v_story_title) end,
+    'zoom', jsonb_typeof(ctl -> 'zoom') = 'string',
+    'sides', sides));
+end $$;
+
+-- ---------- 07：原始分類與小說要素對照 ----------
+-- ctl = {"snapshot": id|null, "category": 分類 id|null, "show_reason": bool, "genre": 類型索引|null,
+--        "elements": [已揭露的要素索引], "highlights": [標示相似的要素索引（必須已揭露）], "scaffold": bool}
+create or replace function app.match_build(p_session uuid, p_ctl jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public, pg_temp as $$
+declare
+  v_set uuid; snap uuid; d jsonb; cat jsonb; v_cat text; gi int; gr public.genres; n_el int;
+  els jsonb; hls jsonb; out_cat jsonb := null; out_genre jsonb := null; show_reason boolean; ctl jsonb; e_out jsonb; i int;
+begin
+  if p_ctl is null or jsonb_typeof(p_ctl) <> 'object' then raise exception 'BAD_DATA'; end if;
+  select content_set_id into v_set from public.sessions where id = p_session;
+  snap := app.uuid_or_null(p_ctl -> 'snapshot');
+  v_cat := nullif(p_ctl ->> 'category', '');
+  show_reason := coalesce((p_ctl ->> 'show_reason')::boolean, false);
+  if snap is not null then
+    d := app.snapshot_for(p_session, snap);
+    if v_cat is not null then
+      select c into cat from jsonb_array_elements(d -> 'norm' -> 'categories') c where c ->> 'id' = v_cat;
+      if cat is null then raise exception 'BAD_DATA'; end if;
+      out_cat := app.cat_label(cat) || jsonb_build_object('cards', app.card_pub(v_set, cat -> 'cards', null),
+        'reason_state', case when show_reason then case when coalesce(cat ->> 'reason', '') = '' then 'empty' else 'shown' end else 'hidden' end)
+        || case when show_reason and coalesce(cat ->> 'reason', '') <> '' then jsonb_build_object('reason', cat ->> 'reason') else '{}'::jsonb end;
+    end if;
+  elsif v_cat is not null then
+    raise exception 'BAD_DATA';
+  end if;
+  els := coalesce(p_ctl -> 'elements', '[]'::jsonb);
+  hls := coalesce(p_ctl -> 'highlights', '[]'::jsonb);
+  if jsonb_typeof(els) <> 'array' or jsonb_typeof(hls) <> 'array' then raise exception 'BAD_DATA'; end if;
+  if jsonb_typeof(p_ctl -> 'genre') = 'number' then
+    gi := (p_ctl ->> 'genre')::int;
+    select * into gr from public.genres where content_set_id = v_set order by sort_order, slug offset gi limit 1;
+    if gi < 0 or not found then raise exception 'BAD_DATA'; end if;
+    n_el := least(3, jsonb_array_length(gr.elements));
+    -- 要素索引必須是 0～n-1 的整數、不重複；標示相似的要素必須已揭露（不能藉標示提前公開）
+    if exists (select 1 from jsonb_array_elements(els) x where jsonb_typeof(x) <> 'number' or (x #>> '{}')::numeric not in (select generate_series(0, n_el - 1)))
+       or (select count(*) from jsonb_array_elements(els)) <> (select count(distinct x) from jsonb_array_elements(els) x)
+       or exists (select 1 from jsonb_array_elements(hls) x where not (els @> jsonb_build_array(x)))
+       or (select count(*) from jsonb_array_elements(hls)) <> (select count(distinct x) from jsonb_array_elements(hls) x) then
+      raise exception 'BAD_DATA';
+    end if;
+    e_out := '[]'::jsonb;
+    for i in 0 .. n_el - 1 loop
+      if els @> to_jsonb(i) or els @> jsonb_build_array(i) then
+        e_out := e_out || jsonb_build_array(jsonb_build_object('slot', i, 'revealed', true,
+                   'label', gr.elements -> i ->> 'label', 'icon', coalesce(gr.elements -> i ->> 'icon', ''),
+                   'highlight', hls @> jsonb_build_array(i)));
+      else
+        e_out := e_out || jsonb_build_array(jsonb_build_object('slot', i, 'revealed', false));
+      end if;
+    end loop;
+    out_genre := jsonb_build_object('name', gr.name, 'visual_url', gr.visual_url, 'elements', e_out);
+  elsif jsonb_typeof(p_ctl -> 'genre') not in ('null') and p_ctl ? 'genre' then
+    raise exception 'BAD_DATA';
+  else
+    if jsonb_array_length(els) > 0 or jsonb_array_length(hls) > 0 then raise exception 'BAD_DATA'; end if;   -- 沒有類型就沒有要素
+  end if;
+  ctl := jsonb_build_object('snapshot', snap, 'category', v_cat, 'show_reason', show_reason,
+                            'genre', gi, 'elements', (select coalesce(jsonb_agg(x order by x::int), '[]'::jsonb) from jsonb_array_elements(els) x),
+                            'highlights', (select coalesce(jsonb_agg(x order by x::int), '[]'::jsonb) from jsonb_array_elements(hls) x),
+                            'scaffold', coalesce((p_ctl ->> 'scaffold')::boolean, false));
+  return jsonb_build_object('ctl', ctl, 'projection', jsonb_build_object(
+    'screen', 'match', 'title', '小小故事分類師',
+    'group', case when d is null then null else jsonb_build_object('group', d ->> 'name', 'number', (d ->> 'number')::int,
+                                                                    'kind', d ->> 'kind', 'complete', (d ->> 'complete')::boolean) end,
+    'category', out_cat, 'genre', out_genre, 'scaffold', coalesce((p_ctl ->> 'scaffold')::boolean, false)));
+end $$;
+
+-- 跨環節揭露紀錄：{"revealed": {"<類型索引>": [已公開的要素索引]}}
+--   * 有 key ＝ 類型名稱已公開；要素只有列在陣列中的才公開
+--   * 06「揭開小說世界」＝名稱＋全部要素；07 只加入當次公開的要素
+--   * 舊格式 {"genres":[…]}（升級前的 Phase 4）無法分辨名稱與要素，保守視為「只公開名稱、零要素」
+drop function if exists app.disclose_genres(uuid, jsonb, jsonb);
+
+create or replace function app.disc_map(p_disc jsonb) returns jsonb language sql immutable set search_path = public, pg_temp as $$
+  select coalesce(case when jsonb_typeof(p_disc -> 'revealed') = 'object' then p_disc -> 'revealed' end, '{}'::jsonb)
+      || coalesce((select jsonb_object_agg(k, '[]'::jsonb)
+                      from (select distinct x #>> '{}' k
+                              from jsonb_array_elements(case when jsonb_typeof(p_disc -> 'genres') = 'array' then p_disc -> 'genres' else '[]'::jsonb end) x
+                             where jsonb_typeof(x) = 'number') t
+                     where not (case when jsonb_typeof(p_disc -> 'revealed') = 'object' then p_disc -> 'revealed' else '{}'::jsonb end) ? k),
+                   '{}'::jsonb);
+$$;
+
+-- 本場素材的類型（與教師端相同排序）
+create or replace function app.genre_at(p_session uuid, p_idx int) returns public.genres
+language sql stable security definer set search_path = public, pg_temp as $$
+  select g.* from public.genres g join public.sessions s on s.content_set_id = g.content_set_id
+   where s.id = p_session order by g.sort_order, g.slug offset p_idx limit 1;
+$$;
+
+-- 加入揭露（只增加）；p_els 為 null ＝ 該類型全部要素
+create or replace function app.disc_add(p_session uuid, p_disc jsonb, p_idx int, p_els jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public, pg_temp as $$
+declare gr public.genres; n_el int; m jsonb; v_add jsonb;
+begin
+  if p_idx is null or p_idx < 0 then raise exception 'BAD_DATA'; end if;
+  gr := app.genre_at(p_session, p_idx);
+  if gr.id is null then raise exception 'BAD_DATA'; end if;
+  n_el := least(3, jsonb_array_length(gr.elements));
+  v_add := case when p_els is null then (select coalesce(jsonb_agg(i), '[]'::jsonb) from generate_series(0, n_el - 1) i) else p_els end;
+  m := app.disc_map(p_disc);
+  m := m || jsonb_build_object(p_idx::text,
+         (select coalesce(jsonb_agg(distinct x order by x), '[]'::jsonb)
+            from (select (jsonb_array_elements_text(coalesce(m -> p_idx::text, '[]'::jsonb) || v_add))::numeric::int x) t
+           where x between 0 and n_el - 1));
+  return (coalesce(p_disc, '{}'::jsonb) - 'genres') || jsonb_build_object('revealed', m);
+end $$;
+
+-- 06 的投影由伺服器依揭露紀錄產生；教師端只送畫面種類與索引（ctl.view、ctl.index、ctl.reveal、recap 的 items），
+-- 教師端送來的 genres／genre／ctl.revealed 一律忽略，不能藉此擴大公開範圍。
+-- 回傳 {projection, disclosure}
+create or replace function app.genre_build(p_session uuid, p_req jsonb, p_disc jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public, pg_temp as $$
+declare
+  n int; v_view text; v_idx int := 0; x jsonb; m jsonb; v_full jsonb; v_items jsonb := '[]'::jsonb;
+  ctl jsonb; proj jsonb; gr public.genres; n_el int;
+begin
+  select count(*) into n from public.genres g join public.sessions s on s.content_set_id = g.content_set_id where s.id = p_session;
+  v_view := coalesce(p_req -> 'ctl' ->> 'view', p_req ->> 'view');
+  if v_view is null or v_view not in ('recap', 'teaser', 'genre', 'overview') then raise exception 'BAD_DATA'; end if;
+  x := p_req -> 'ctl' -> 'index';
+  if x is null or jsonb_typeof(x) = 'null' then
+    if v_view in ('teaser', 'genre') then raise exception 'BAD_DATA'; end if;
+  elsif jsonb_typeof(x) <> 'number' or (x #>> '{}')::numeric not in (select generate_series(0, n - 1)) then
+    raise exception 'BAD_DATA';
+  else
+    v_idx := (x #>> '{}')::numeric::int;
+  end if;
+  -- 只有明確的「揭開小說世界」才完整揭露
+  if v_view = 'genre' and p_req -> 'ctl' -> 'reveal' = 'true'::jsonb then
+    p_disc := app.disc_add(p_session, p_disc, v_idx, null);
+  end if;
+  m := app.disc_map(p_disc);
+  select coalesce(jsonb_agg(t.i order by t.i), '[]'::jsonb) into v_full
+    from (select (row_number() over (order by g.sort_order, g.slug) - 1)::int i, least(3, jsonb_array_length(g.elements)) n_el
+            from public.genres g join public.sessions s on s.content_set_id = g.content_set_id where s.id = p_session) t
+   where m ? t.i::text and jsonb_array_length(m -> t.i::text) >= t.n_el;
+  if v_view = 'genre' and not v_full @> to_jsonb(v_idx) then v_view := 'teaser'; end if;
+  ctl := jsonb_build_object('view', v_view, 'index', v_idx, 'revealed', v_full);
+
+  if v_view = 'recap' then
+    x := p_req -> 'items';
+    if jsonb_typeof(x) = 'array' and jsonb_array_length(x) <= 8
+       and not exists (select 1 from jsonb_array_elements(x) e where jsonb_typeof(e) <> 'string' or char_length(e #>> '{}') > 200) then
+      v_items := x;
+    end if;
+    proj := jsonb_build_object('screen', 'genre', 'view', 'recap', 'items', v_items, 'ctl', ctl);
+  elsif v_view = 'overview' then
+    proj := jsonb_build_object('screen', 'genre', 'view', 'overview', 'ctl', ctl, 'genres',
+      (select coalesce(jsonb_agg(case when m ? t.i::text then
+                 jsonb_build_object('name', t.name, 'visual_url', t.visual_url, 'elements',
+                   (select coalesce(jsonb_agg(case when (m -> t.i::text) @> to_jsonb(k)
+                                                   then jsonb_build_object('label', t.elements -> k ->> 'label', 'icon', coalesce(t.elements -> k ->> 'icon', ''))
+                                                   else jsonb_build_object('hidden', true) end order by k), '[]'::jsonb)
+                      from generate_series(0, least(3, jsonb_array_length(t.elements)) - 1) k))
+               else null end order by t.i), '[]'::jsonb)
+         from (select (row_number() over (order by g.sort_order, g.slug) - 1)::int i, g.name, g.visual_url, g.elements
+                 from public.genres g join public.sessions s on s.content_set_id = g.content_set_id where s.id = p_session) t));
+  else
+    gr := app.genre_at(p_session, v_idx);
+    n_el := least(3, jsonb_array_length(gr.elements));
+    proj := jsonb_build_object('screen', 'genre', 'view', v_view, 'ctl', ctl, 'index', v_idx, 'total', n,
+      'genre', case when v_view = 'genre' then jsonb_build_object('name', gr.name, 'visual_url', gr.visual_url, 'elements',
+                 (select coalesce(jsonb_agg(jsonb_build_object('label', gr.elements -> k ->> 'label', 'icon', coalesce(gr.elements -> k ->> 'icon', '')) order by k), '[]'::jsonb)
+                    from generate_series(0, n_el - 1) k)) end);
+  end if;
+  return jsonb_build_object('projection', proj, 'disclosure', coalesce(p_disc, '{}'::jsonb));
+end $$;
+
+-- 升級相容：舊版教師端在 06 自行產生的投影，ctl.revealed 是當時「已完整揭露」並已顯示在投影上的類型。
+-- 離開這個畫面前把它併入紀錄（無效的索引略過，不讓切換失敗）；伺服器產生的投影再併一次結果不變。
+create or replace function app.disc_from_legacy(p_session uuid, p_disc jsonb, p_proj jsonb) returns jsonb
+language plpgsql stable security definer set search_path = public, pg_temp as $$
+declare n int; x jsonb;
+begin
+  if coalesce(p_proj ->> 'screen', '') <> 'genre' or coalesce(jsonb_typeof(p_proj -> 'ctl' -> 'revealed'), '') <> 'array' then return p_disc; end if;
+  select count(*) into n from public.genres g join public.sessions s on s.content_set_id = g.content_set_id where s.id = p_session;
+  for x in select * from jsonb_array_elements(p_proj -> 'ctl' -> 'revealed') loop
+    if jsonb_typeof(x) = 'number' and (x #>> '{}')::numeric in (select generate_series(0, n - 1)) then
+      p_disc := app.disc_add(p_session, p_disc, (x #>> '{}')::numeric::int, null);
+    end if;
+  end loop;
+  return p_disc;
+end $$;
+
+-- 預覽：只讀，不改變投影或任何資料
+create or replace function public.teacher_preview_compare(p_session uuid, p_ctl jsonb)
+returns jsonb language plpgsql stable security definer set search_path = public, pg_temp as $$
+begin
+  perform app.teacher_session_ro(p_session);
+  return app.compare_build(p_session, p_ctl);
+end $$;
+
+create or replace function public.teacher_preview_match(p_session uuid, p_ctl jsonb)
+returns jsonb language plpgsql stable security definer set search_path = public, pg_temp as $$
+begin
+  perform app.teacher_session_ro(p_session);
+  return app.match_build(p_session, p_ctl);
+end $$;
+
+-- 公開：版本檢查＋只限該環節；投影資料由伺服器產生，選擇（綁定 snapshot ID）保存在 stage_ctl
+create or replace function public.teacher_publish_compare(p_session uuid, p_ctl jsonb, p_expected_rev bigint)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
+declare s public.sessions; st public.session_state; r jsonb;
+begin
+  if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
+  s := app.own_session(p_session);
+  if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
+  select * into st from public.session_state where session_id = p_session for update;
+  if st.rev <> p_expected_rev then return jsonb_build_object('ok', false, 'code', 'STALE', 'rev', st.rev); end if;
+  if st.phase <> '05' then raise exception 'NOT_AVAILABLE'; end if;
+  r := app.compare_build(p_session, p_ctl);
+  update public.session_state set projection = r -> 'projection', sub = '05',
+         stage_ctl = stage_ctl || jsonb_build_object('05', r -> 'ctl'), rev = rev + 1, updated_at = now()
+   where session_id = p_session returning * into st;
+  return jsonb_build_object('ok', true, 'rev', st.rev, 'ctl', r -> 'ctl');
+end $$;
+
+create or replace function public.teacher_publish_match(p_session uuid, p_ctl jsonb, p_expected_rev bigint)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
+declare s public.sessions; st public.session_state; r jsonb;
+begin
+  if p_expected_rev is null then raise exception 'BAD_DATA'; end if;
+  s := app.own_session(p_session);
+  if s.status <> 'active' then raise exception 'SESSION_ENDED'; end if;
+  select * into st from public.session_state where session_id = p_session for update;
+  if st.rev <> p_expected_rev then return jsonb_build_object('ok', false, 'code', 'STALE', 'rev', st.rev); end if;
+  if st.phase <> '07' then raise exception 'NOT_AVAILABLE'; end if;
+  r := app.match_build(p_session, p_ctl);
+  update public.session_state set projection = r -> 'projection', sub = '07',
+         stage_ctl = stage_ctl || jsonb_build_object('07', r -> 'ctl'),
+         -- 在 07 公開的類型名稱與「當次公開的要素」加入揭露紀錄；未公開的要素不會因此在 06 總覽出現
+         disclosure = case when r -> 'ctl' -> 'genre' is null or jsonb_typeof(r -> 'ctl' -> 'genre') = 'null' then disclosure
+                           else app.disc_add(p_session, disclosure, (r -> 'ctl' ->> 'genre')::int, r -> 'ctl' -> 'elements') end,
+         rev = rev + 1, updated_at = now()
+   where session_id = p_session returning * into st;
+  return jsonb_build_object('ok', true, 'rev', st.rev, 'ctl', r -> 'ctl');
+end $$;
+
 -- =====================================================================
 -- 故事找朋友｜權限設定（RLS、資料表與函式授權）
 -- 前置：001_init.sql、002_rpc.sql。可重複執行。
@@ -1009,7 +1454,11 @@ grant execute on function
   public.teacher_purge_expired(),
   public.teacher_unlock_group(uuid),
   public.teacher_move_participant(uuid, int),
-  public.teacher_remove_participant(uuid)
+  public.teacher_remove_participant(uuid),
+  public.teacher_preview_compare(uuid, jsonb),
+  public.teacher_preview_match(uuid, jsonb),
+  public.teacher_publish_compare(uuid, jsonb, bigint),
+  public.teacher_publish_match(uuid, jsonb, bigint)
 to authenticated;
 
 -- 之後新增的函式預設不開放
@@ -1019,7 +1468,7 @@ commit;
 
 -- =====================================================================
 -- 故事找朋友｜升級後檢查（唯讀，可隨時執行；不修改任何資料）
--- 在 Supabase SQL Editor 執行後，每一列（15 列）的 ok 都應為 true。
+-- 在 Supabase SQL Editor 執行後，每一列（17 列）的 ok 都應為 true。
 -- =====================================================================
 with
 tables as (
@@ -1084,4 +1533,20 @@ select '14. 個人分類結束標記欄位存在', exists (select 1 from informa
         where table_schema = 'public' and table_name = 'session_state' and column_name = 'personal_closed_at')
 union all
 select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
-        where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev');
+        where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev')
+union all
+select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果）',
+       (select count(*) from information_schema.columns where table_schema = 'public'
+          and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
+            or (table_name = 'group_category_tombstones' and column_name = 'result'))) = 3
+union all
+select '17. Phase 4 函式存在且只開放給教師（含 06 伺服器產生投影）',
+       to_regprocedure('public.teacher_publish_compare(uuid,jsonb,bigint)') is not null
+       and to_regprocedure('public.teacher_publish_match(uuid,jsonb,bigint)') is not null
+       and has_function_privilege('authenticated', 'public.teacher_preview_compare(uuid,jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.teacher_preview_compare(uuid,jsonb)', 'execute')
+       and not has_function_privilege('anon', 'public.teacher_publish_match(uuid,jsonb,bigint)', 'execute')
+       and not has_function_privilege('anon', 'app.compare_build(uuid,jsonb)', 'execute')
+       and to_regprocedure('app.genre_build(uuid,jsonb,jsonb)') is not null
+       and not has_function_privilege('anon', 'app.genre_build(uuid,jsonb,jsonb)', 'execute')
+       and not has_function_privilege('authenticated', 'app.genre_build(uuid,jsonb,jsonb)', 'execute');

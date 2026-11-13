@@ -8,7 +8,7 @@
 
 技術：GitHub Pages（靜態網站，無建置步驟）＋ Supabase（PostgreSQL、RPC、Realtime）。
 
-## 目前進度：Phase 3 小組共作
+## 目前進度：Phase 4 成果比較與小說類型教學
 
 | 項目 | 狀態 |
 |---|---|
@@ -22,7 +22,10 @@
 | 03 教師進度、查看個人成果、暫停／恢復、結束並鎖定快照（Phase 2） | ✅ |
 | 04 小組共作工作區（個人參考面板、多人即時同步、卡片與欄位操作鎖、共同特色、提交）（Phase 3） | ✅ |
 | 04 教師監控、單組檢視、暫停、重新開放、結束並保存各組成果（Phase 3） | ✅ |
-| 05 成果比較、07 分類與小說要素對照（Phase 4） | ⏳ |
+| 05 分類成果大公開：教師私下預覽、雙組比較、故事追蹤、理由逐項揭露（Phase 4） | ✅ |
+| 06 揭開小說類型：揭露紀錄跨環節保存（Phase 4 補強） | ✅ |
+| 07 小小故事分類師：原始分類 ↔ 小說要素對照、相似標示、句型鷹架（Phase 4） | ✅ |
+| 正式 Supabase、實體平板的驗收（見 `docs/PHASE4.md` 第八節） | ⏳ 待使用者實機確認 |
 
 驗證範圍與尚未在正式 Supabase 上驗證的項目，請見 [`docs/TESTING.md`](docs/TESTING.md)。
 
@@ -34,6 +37,8 @@
 * [`docs/PHASE2.md`](docs/PHASE2.md)：Phase 2 交付說明（升級 SQL、測試結果、實機驗收清單、Phase 3 沿用說明）
 * [`docs/PHASE3.md`](docs/PHASE3.md)：Phase 3 交付說明（升級 SQL、同步與衝突設計、多人測試結果、實機驗收清單、Phase 4 資料結構）
 * [`docs/REVIEW_PHASE3.md`](docs/REVIEW_PHASE3.md)：Phase 3 獨立複檢的回應與修正
+* [`docs/PHASE4.md`](docs/PHASE4.md)：Phase 4 交付說明（公開流程、快照選取、資料安全、升級、教師驗收步驟）
+* [`docs/REVIEW_HANDOFF_PHASE4.md`](docs/REVIEW_HANDOFF_PHASE4.md)：Phase 4 複檢交接
 
 ## 目錄
 
