@@ -21,6 +21,13 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 button.primary, .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 button.danger { color: var(--bad); border-color: #e6b5b5; }
 button.small, select.small, .small { font-size: .85em; padding: .25em .5em; }
+/* 觸控裝置（平板、手機）：按鈕、選單與勾選列的觸控目標至少 44px（Phase 5 觸控驗收）；字級不變、桌機不受影響 */
+@media (pointer: coarse) {
+  button, .btn, select { min-height: 44px; }
+  button.small, select.small { min-height: 44px; min-width: 44px; padding-top: .35em; padding-bottom: .35em; }
+  label:has(> input[type=checkbox]), label:has(> input[type=radio]) { min-height: 44px; display: inline-flex; align-items: center; gap: .4em; }
+  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }
+}
 .muted { color: var(--muted); }
 .error, .s-error { color: var(--bad); }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }

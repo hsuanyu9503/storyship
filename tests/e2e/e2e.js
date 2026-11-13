@@ -6,6 +6,9 @@ const pg = new Pool({ connectionString: process.env.DATABASE_URL || 'postgres://
 const fs = require('fs');
 const path = require('path');
 const BASE = process.env.BASE || 'http://localhost:8787';
+// 教師帳號（shim 預設 t1@example.com／pass；對真實 Supabase 執行時由 tests/supabase/e2e_real.sh 指定）
+const T_EMAIL = process.env.E2E_EMAIL || 't1@example.com';
+const T_PASS = process.env.E2E_PASSWORD || 'pass';
 const OUT = path.join(__dirname, '.cache/shots');
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -35,7 +38,12 @@ async function ctx(browser, opts = {}) {
 }
 const text = (page) => page.evaluate(() => document.body.innerText);
 async function waitText(page, s, ms = 12000) {
-  await page.waitForFunction((s) => document.body.innerText.includes(s), s, { timeout: ms });
+  try { await page.waitForFunction((s) => document.body.innerText.includes(s), s, { timeout: ms }); }
+  catch (e) {   // 診斷：等不到時印出畫面上實際的文字
+    const t = await page.evaluate(() => document.body.innerText).catch(() => '(無法讀取)');
+    console.log(`DIAG waitText「${s}」逾時；畫面：${t.replace(/\s+/g, ' ').slice(0, 400)}`);
+    throw e;
+  }
 }
 async function waitNoText(page, s, ms = 12000) {
   await page.waitForFunction((s) => !document.body.innerText.includes(s), s, { timeout: ms });
@@ -45,8 +53,8 @@ async function waitNoText(page, s, ms = 12000) {
 const grip = (page, title) => page.locator(`.sc:has(.sc-title:text-is("${title}")) .sc-grip`);
 const cat = (page, i) => page.locator('.bd-cat').nth(i);
 const countText = (page) => page.textContent('.bd-count');
-async function waitCount(page, n, total = 8) {
-  await page.waitForFunction((s) => document.querySelector('.bd-count')?.textContent === s, `已分類 ${n} / ${total}`, { timeout: 8000 });
+async function waitCount(page, n, total = 8, ms = 8000) {
+  await page.waitForFunction((s) => document.querySelector('.bd-count')?.textContent === s, `已分類 ${n} / ${total}`, { timeout: ms });
 }
 function center(b, dy) { return [b.x + b.width / 2, b.y + (dy ?? b.height / 2)]; }
 // 滑鼠拖曳（桌面）
@@ -113,8 +121,8 @@ async function inViewport(page, sel) {
     const teacher = await tc.newPage();
     teacher.on('pageerror', (e) => errors.push('teacher: ' + e.message));
     await teacher.goto(BASE + '/teacher.html');
-    await teacher.fill('input[type=email]', 't1@example.com');
-    await teacher.fill('input[type=password]', 'pass');
+    await teacher.fill('input[type=email]', T_EMAIL);
+    await teacher.fill('input[type=password]', T_PASS);
     await teacher.click('button[type=submit]');
     await waitText(teacher, '建立教學場次');
     await teacher.click('text=建立（六組）');
@@ -309,7 +317,9 @@ async function inViewport(page, sel) {
     await waitText(s0b, '已分類 7 / 8');
     await tapMove(s0b, '故事 H', cat(s0b, 1));
     await waitCount(s0b, 8);
-    await waitCount(s0, 8);
+    // 個人分類的一般儲存不送 Broadcast（避免全班每次拖曳都觸發所有裝置重新讀取）；
+    // Realtime 連線時輪詢放慢為 15 秒，所以同一位學生的另一個分頁最慢 15 秒內收斂（shim 沒有 Realtime，3 秒輪詢）
+    await waitCount(s0, 8, 8, 20000);
     ok((await boardState(s0)).cats[1].cards.includes('故事 H'), '03：同一學生的第二個分頁修改後，第一個分頁同步到最新版本（不會用舊資料覆蓋）');
     await s0b.close();
 
@@ -463,8 +473,12 @@ async function inViewport(page, sel) {
     ok((await s1.locator('.sc-grip').count()) === 0 && (await countText(s1)) === '已分類 2 / 8', '返回 03：學生無法修改，看到的是已鎖定的成果');
     ok((await text(teacher)).includes('個人分類已結束'), '返回 03：教師端顯示個人分類已鎖定');
     const closed03 = await dbState();
+    // Phase 5：所有學生都確實回到 03 畫面後才再前進（04 → 03 → 04）。Realtime 連線時學生會立刻看到 03，
+    // 舊版在這裡留下前一個小組工作區、沒有重新掛上，學生停在 03 的畫面（shim 的 3 秒輪詢常常錯過這個中間狀態）
+    for (const p of [s0, s1, s2]) await waitText(p, "我的故事分類", 15000);
     await teacher.click('button:has-text("進入第四環節：小組共作 →")');
-    await waitText(s0, '第 1 組｜共同分類');
+    for (const p of [s0, s1, s2]) await waitText(p, "共同分類", 15000);
+    ok(true, '04 → 03 → 04：每位學生都回到小組共作畫面（不需重新整理）');
     await teacher.waitForTimeout(1000);
     {
       const again = await dbState();
@@ -1091,6 +1105,14 @@ async function inViewport(page, sel) {
     await s3c.close();
 
     // ---------- 05｜分類成果大公開（Phase 4） ----------
+    // 學生答案與快照的指紋：05 之後的展示、切換、返回、結束都不能改寫它們（Phase 5 整堂課驗收）
+    const answersDigest = async () => (await pg.query(`select md5(string_agg(t, '|' order by t)) d from (
+      select 'b' || participant_id || data::text || rev || coalesce(submitted_at::text, '') t from public.personal_boards where session_id = $1 union all
+      select 'ps' || participant_id || data::text || is_complete || taken_at from public.personal_snapshots where session_id = $1 union all
+      select 'gc' || c.id || c.name || c.reason || c.name_rev || c.reason_rev from public.group_categories c join public.groups g on g.id = c.group_id where g.session_id = $1 union all
+      select 'gp' || p.group_id || p.card_id || coalesce(p.category_id::text, '') || p.rev from public.group_placements p join public.groups g on g.id = p.group_id where g.session_id = $1 union all
+      select 'gs' || id || data::text || kind || is_complete || board_rev || created_at from public.group_snapshots where session_id = $1) x`, [sid])).rows[0].d;
+    const digestAt05 = await answersDigest();
     const panel = () => teacher.textContent('section.panel');
     await waitText(proj, '比一比：兩組的分類有什麼不同？');
     await teacher.waitForSelector('.rs-grid');
@@ -1267,7 +1289,7 @@ async function inViewport(page, sel) {
     await t2.goto(teacher.url());   // 同一位教師的第二台裝置（另一個瀏覽器 context，需重新登入）
     await t2.waitForSelector('input[type=email], .rs-grid', { timeout: 15000 });
     if (await t2.locator('input[type=email]').count()) {
-      await t2.fill('input[type=email]', 't1@example.com'); await t2.fill('input[type=password]', 'pass'); await t2.click('button[type=submit]');
+      await t2.fill('input[type=email]', T_EMAIL); await t2.fill('input[type=password]', T_PASS); await t2.click('button[type=submit]');
     }
     await t2.waitForSelector('.rs-grid', { timeout: 15000 });
     const hold = deferred();
@@ -1299,6 +1321,133 @@ async function inViewport(page, sel) {
     await proj.waitForTimeout(3000);
     ok((await text(proj)).includes('「故事 F」') && (await text(t2)).includes('投影與預覽一致'), '05：快速連續公開，投影停在最後一次的選擇');
     await t2.screenshot({ path: path.join(OUT, 't05-panel.png') });
+    // ---------- Phase 5 R1：公開成功後的同步（兩台教師裝置；以閘門控制讀取順序，不靠固定等待） ----------
+    const statusOf = (p) => p.evaluate(() => [...document.querySelectorAll('.rs-bar .rs-dirty, .rs-bar .rs-clean')].map((e) => e.textContent).join('|'));
+    const canPublish = (p) => p.evaluate(() => { const b = [...document.querySelectorAll('.rs-bar button.primary')].pop(); return Boolean(b && !b.disabled && b.textContent.includes('公開到投影')); });
+    const waitOn = async (fn, ms = 15000) => { const t = Date.now() + ms; while (Date.now() < t) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 150)); } return false; };
+    // 讀取閘門：攔截某台裝置的 session_state 讀取。pass＝放行、one＝放行下一次後改為 hold、hold＝排隊、fail＝中斷
+    async function gateReads(page) {
+      const g = { mode: 'pass', held: [], after: 0, counting: false };
+      await page.route('**/rest/v1/session_state*', (route) => {
+        if (g.mode === 'pass') { if (g.counting) g.after++; return route.continue().catch(() => {}); }
+        if (g.mode === 'one') { g.mode = 'hold'; return route.continue().catch(() => {}); }
+        if (g.mode === 'fail') return route.abort('failed').catch(() => {});
+        g.held.push(route);
+      });
+      g.open = () => { g.mode = 'pass'; g.counting = true; g.held.splice(0).forEach((r) => { g.after++; r.continue().catch(() => {}); }); };
+      g.done = () => page.unroute('**/rest/v1/session_state*');
+      return g;
+    }
+    // 攔截公開：伺服器處理完、瀏覽器收到回應「之前」切換閘門（確定下一次讀取就是公開後的 refresh）
+    //   lose：伺服器已寫入但回應遺失（結果不明）；drop：請求根本沒到伺服器（失敗）；hold：延後送出
+    async function armPublish(page, fn, g, nextMode, { lose = false, drop = false, hold = null } = {}) {
+      const a = { n: 0 };
+      await page.route(`**/rpc/${fn}`, async (route) => {
+        a.n++;
+        if (hold) await hold;
+        if (drop) { g.mode = nextMode; return route.abort('failed').catch(() => {}); }
+        const resp = await route.fetch();
+        g.mode = nextMode;
+        if (lose) return route.abort('failed').catch(() => {});
+        return route.fulfill({ response: resp }).catch(() => {});
+      });
+      a.done = () => page.unroute(`**/rpc/${fn}`);
+      return a;
+    }
+    const syncedOn = async (p, isX) => (await isX(p)) && (await statusOf(p)).includes('投影與預覽一致');
+    // sc: { tag, fn, d1, d2, pickB(p), pickC(p), pickD(p), isA/isB/isC/isD(p), db(): 'A'|'B'|'C'|'D'|other }
+    async function r1Suite(sc) {
+      const { tag, fn, d1, d2 } = sc;
+      const publishOn = async (p) => { await waitOn(() => canPublish(p), 12000); await p.locator('.rs-bar button.primary:has-text("公開到投影")').last().click(); };
+      ok(await waitOn(() => syncedOn(d1, sc.isA)) && await waitOn(() => syncedOn(d2, sc.isA)), `R1（${tag}）：前置：兩台裝置都顯示 A 且一致`);
+      // (1) 主要情境：裝置一公開 B 成功、之後沒有修改；裝置二在裝置一下一次輪詢前公開 C
+      {
+        const g = await gateReads(d1); const a = await armPublish(d1, fn, g, 'one');
+        await sc.pickB(d1); await publishOn(d1);
+        ok(await waitOn(async () => a.n === 1 && (await sc.db()) === 'B' && await syncedOn(d1, sc.isB)), `R1（${tag}）：裝置一公開 B 成功並顯示一致`);
+        await a.done();
+        ok(await waitOn(() => syncedOn(d2, sc.isB), 20000), `R1（${tag}）：裝置二讀到 B`);
+        await sc.pickC(d2); await publishOn(d2);
+        ok(await waitOn(async () => (await sc.db()) === 'C'), `R1（${tag}）：裝置二公開 C（裝置一的輪詢仍被擋住）`);
+        g.open();
+        const conv = await waitOn(async () => g.after >= 1 && await syncedOn(d1, sc.isC), 20000);
+        ok(conv, `R1（${tag}）：裝置一讀到 C 後，選擇與預覽跟著變成 C、顯示一致（讀取 ${g.after} 次後：${await statusOf(d1)}）`);
+        await g.done();
+      }
+      // (2) 公開 B 在途時改成 D：保留 D、不自動公開、不被另一台的 C 清除
+      {
+        const g = await gateReads(d1); const rel = later(); const a = await armPublish(d1, fn, g, 'one', { hold: rel.p });
+        await sc.pickB(d1); await publishOn(d1);
+        await waitOn(async () => a.n === 1, 5000);
+        await sc.pickD(d1);
+        rel.res();
+        ok(await waitOn(async () => (await sc.db()) === 'B'), `R1（${tag}）：在途的公開以送出的 B 為準`);
+        await a.done();
+        ok(await waitOn(() => syncedOn(d2, sc.isB), 20000), `R1（${tag}）：裝置二讀到 B`);
+        await sc.pickC(d2); await publishOn(d2);
+        await waitOn(async () => (await sc.db()) === 'C');
+        g.open();
+        await waitOn(async () => g.after >= 2, 20000);
+        ok((await sc.isD(d1)) && (await statusOf(d1)).includes('有尚未公開的變更') && (await sc.db()) === 'C' && a.n === 1,
+          `R1（${tag}）：公開在途時改成的 D 保留在預覽、標示尚未公開，沒有自動公開也沒有被 C 清除`);
+        await g.done();
+        await d1.locator('button:has-text("放棄變更")').first().click();
+        ok(await waitOn(() => syncedOn(d1, sc.isC)), `R1（${tag}）：放棄變更後回到投影中的 C`);
+      }
+      // (3) 請求沒有到達伺服器（失敗）：不能當成成功；不自動重送
+      {
+        const g = await gateReads(d1); const a = await armPublish(d1, fn, g, 'pass', { drop: true });
+        await sc.pickB(d1); await publishOn(d1);
+        await waitOn(async () => a.n === 1, 5000);
+        await d1.waitForTimeout(200);
+        ok(await waitOn(async () => (await sc.isB(d1)) && (await statusOf(d1)).includes('有尚未公開的變更')) && (await sc.db()) === 'C',
+          `R1（${tag}）：公開請求失敗時保留 B、標示尚未公開（伺服器仍是 C）`);
+        await a.done(); await g.done();
+        await waitOn(async () => false, 5500);   // 超過一次輪詢週期：確認沒有自動重送
+        ok(a.n === 1 && (await sc.db()) === 'C', `R1（${tag}）：失敗後沒有自動重送`);
+        await d1.locator('button:has-text("放棄變更")').first().click();
+        ok(await waitOn(() => syncedOn(d1, sc.isC)), `R1（${tag}）：放棄變更後回到 C`);
+      }
+      // (4) 結果不明：伺服器已寫入 B、回應遺失 → 只在讀到伺服器確實是 B 之後才算一致；之後仍跟著另一台的新公開
+      {
+        const g = await gateReads(d1); const a = await armPublish(d1, fn, g, 'one', { lose: true });
+        await sc.pickB(d1); await publishOn(d1);
+        ok(await waitOn(async () => a.n === 1 && (await sc.db()) === 'B' && await syncedOn(d1, sc.isB)), `R1（${tag}）：結果不明時重新讀取伺服器，確認是 B 才顯示一致`);
+        await a.done();
+        ok(await waitOn(() => syncedOn(d2, sc.isB), 20000), `R1（${tag}）：裝置二讀到 B`);
+        await sc.pickC(d2); await publishOn(d2);
+        await waitOn(async () => (await sc.db()) === 'C');
+        g.open();
+        ok(await waitOn(async () => await syncedOn(d1, sc.isC), 20000) && a.n === 1, `R1（${tag}）：結果不明的公開之後，仍跟著另一台裝置的 C（沒有重送）`);
+        await g.done();
+      }
+      // (5) 公開成功但之後的讀取失敗（refresh 失敗）：不倒回舊的 C、不重送；網路恢復後收斂到 B
+      {
+        const g = await gateReads(d1); const a = await armPublish(d1, fn, g, 'fail');
+        await sc.pickB(d1); await publishOn(d1);
+        await waitOn(async () => a.n === 1 && (await sc.db()) === 'B');
+        await waitOn(async () => false, 6000);   // 至少一次失敗的輪詢
+        ok((await sc.isB(d1)) && a.n === 1, `R1（${tag}）：公開後讀取失敗時，選擇維持 B、沒有倒回 C，也沒有重送`);
+        await a.done();
+        g.open();
+        ok(await waitOn(() => syncedOn(d1, sc.isB), 20000), `R1（${tag}）：網路恢復後收斂為 B、顯示一致`);
+        await g.done();
+      }
+    }
+    if (!process.env.SKIP_R1) {
+      const story = (p) => p.evaluate(() => document.querySelector('select.rs-story')?.selectedOptions[0]?.textContent || '');
+      const pick = (lab) => async (p) => { await p.selectOption('select.rs-story', { label: lab }); };
+      const is = (lab) => async (p) => (await story(p)) === lab;
+      const dbStory = async () => ({ 故事F: 'A', 故事D: 'B', 故事E: 'C', 故事G: 'D' })[((await pubStory()) || '').replace(' ', '')] || 'X';
+      if (await teacher.locator('button:has-text("放棄變更")').count()) await teacher.locator('button:has-text("放棄變更")').first().click();
+      await r1Suite({ tag: '05', fn: 'teacher_publish_compare', d1: teacher, d2: t2,
+        pickB: pick('故事 D'), pickC: pick('故事 E'), pickD: pick('故事 G'),
+        isA: is('故事 F'), isB: is('故事 D'), isC: is('故事 E'), isD: is('故事 G'), db: dbStory });
+      // 收尾：回到 F（之後的測試沿用）
+      await t2.selectOption('select.rs-story', { label: '故事 F' });
+      await waitOn(() => canPublish(t2)); await t2.locator('.rs-bar button.primary:has-text("公開到投影")').last().click();
+      ok(await waitOn(async () => (await pubStory()) === '故事 F' && await syncedOn(teacher, is('故事 F')), 20000), 'R1（05）：收尾後兩台裝置回到 F');
+    }
     // 教師平板：橫向、直向
     for (const [w, hgt, name] of [[1024, 768, 'landscape'], [768, 1024, 'portrait']]) {
       await t2.setViewportSize({ width: w, height: hgt });
@@ -1386,6 +1535,35 @@ async function inViewport(page, sel) {
       await teacher.click('button:has-text("公開到投影")');
       ok(await until(async () => (await pubScaffold()) === 'true' && (await statusTxt()).includes('投影與預覽一致'), 12000), 'F3（07）：再按公開才公開，之後顯示一致');
     }
+    // ---------- Phase 5 R1（07） ----------
+    if (!process.env.SKIP_R1) {
+      const tc4 = await ctx(browser, { viewport: { width: 1366, height: 1000 } });
+      const t4 = await tc4.newPage();
+      t4.on('pageerror', (e) => errors.push('teacher4: ' + e.message));
+      await t4.goto(teacher.url());
+      await t4.waitForSelector('input[type=email], .genre-pick', { timeout: 15000 });
+      if (await t4.locator('input[type=email]').count()) {
+        await t4.fill('input[type=email]', T_EMAIL); await t4.fill('input[type=password]', T_PASS); await t4.click('button[type=submit]');
+      }
+      await t4.waitForSelector('.genre-pick', { timeout: 15000 });
+      const box = (lab) => (p) => p.locator(`label:has-text("${lab}") input`);
+      const scaf = box('顯示句型鷹架'); const rsn = box('一併顯示這一類的共同特色');
+      const state = async (p) => [await scaf(p).isChecked(), await rsn(p).isChecked()].join();
+      const setTo = (sc, rs) => async (p) => { if ((await scaf(p).isChecked()) !== sc) await scaf(p).click(); if ((await rsn(p).isChecked()) !== rs) await rsn(p).click(); };
+      const is = (sc, rs) => async (p) => (await state(p)) === [sc, rs].join();
+      const db07 = async () => {
+        const r = (await pg.query(`select projection ->> 'scaffold' s, projection #>> '{category,reason_state}' r from public.session_state where session_id = $1`, [sid])).rows[0];
+        return ({ 'true,hidden': 'A', 'false,hidden': 'B', 'true,shown': 'C', 'false,shown': 'D' })[`${r.s},${r.r}`] || 'X';
+      };
+      await r1Suite({ tag: '07', fn: 'teacher_publish_match', d1: teacher, d2: t4,
+        pickB: setTo(false, false), pickC: setTo(true, true), pickD: setTo(false, true),
+        isA: is(true, false), isB: is(false, false), isC: is(true, true), isD: is(false, true), db: db07 });
+      // 收尾：回到 A（鷹架開、不顯示理由）
+      await setTo(true, false)(t4);
+      await waitOn(() => canPublish(t4)); await t4.locator('.rs-bar button.primary:has-text("公開到投影")').last().click();
+      ok(await waitOn(async () => (await db07()) === 'A' && await syncedOn(teacher, is(true, false)), 20000), 'R1（07）：收尾後兩台裝置回到 A');
+      await tc4.close();
+    }
     // 更換類型：不殘留上一種類型的標示
     await teacher.click('button.genre-btn:has-text("3. 歷史小說")');
     ok((await teacher.locator('.rs-el input:checked').count()) === 0, '07：更換類型時清除要素揭露與相似標示');
@@ -1446,7 +1624,7 @@ async function inViewport(page, sel) {
       await t3.goto(teacher.url());
       await t3.waitForSelector('input[type=email], .genre-pick', { timeout: 15000 });
       if (await t3.locator('input[type=email]').count()) {
-        await t3.fill('input[type=email]', 't1@example.com'); await t3.fill('input[type=password]', 'pass'); await t3.click('button[type=submit]');
+        await t3.fill('input[type=email]', T_EMAIL); await t3.fill('input[type=password]', T_PASS); await t3.click('button[type=submit]');
       }
       await t3.waitForSelector('.genre-pick', { timeout: 15000 });
       ok((await t3.locator('.genre-btn:has-text("3. 歷史小說")').textContent()).includes('✓')
@@ -1473,6 +1651,12 @@ async function inViewport(page, sel) {
     await waitText(proj, '每一種分類，都從觀察開始。');
     await waitText(students[1].page, '每一種分類，都從觀察開始。');
     ok(true, '結束畫面三端同步');
+    // 結束場次（真實按鈕）：學生停止編輯；05 之後所有展示、返回、結束都沒有改寫學生答案或快照
+    await teacher.click('button.danger:has-text("結束場次（學生不能再修改）")');
+    await teacher.click('dialog button:has-text("結束場次")');
+    ok(await (async () => { for (let i = 0; i < 60; i++) { if ((await pg.query(`select status from public.sessions where id = $1`, [sid])).rows[0].status === 'ended') return true; await teacher.waitForTimeout(250); } return false; })(),
+      '整堂課：教師結束場次');
+    ok((await answersDigest()) === digestAt05, '整堂課：05→06→07→返回→結束場次，學生的個人／小組答案與所有快照逐位元組不變');
 
     // 教師以平板尺寸操作（重要按鈕不被遮擋）
     await teacher.setViewportSize({ width: 1024, height: 768 });

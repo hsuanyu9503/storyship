@@ -25,7 +25,8 @@
 | 05 分類成果大公開：教師私下預覽、雙組比較、故事追蹤、理由逐項揭露（Phase 4） | ✅ |
 | 06 揭開小說類型：揭露紀錄跨環節保存（Phase 4 補強） | ✅ |
 | 07 小小故事分類師：原始分類 ↔ 小說要素對照、相似標示、句型鷹架（Phase 4） | ✅ |
-| 正式 Supabase、實體平板的驗收（見 `docs/PHASE4.md` 第八節） | ⏳ 待使用者實機確認 |
+| Phase 5 上線準備：整堂課回歸、隔離的本機 Supabase 驗證、觸控與投影量測（見 `docs/PHASE5.md`） | ✅ 自動化測試 |
+| 正式（雲端）Supabase、實體平板、投影機的驗收（見 `docs/PHASE5.md` 第七節人工驗收表） | ⏳ 待使用者實機確認 |
 
 驗證範圍與尚未在正式 Supabase 上驗證的項目，請見 [`docs/TESTING.md`](docs/TESTING.md)。
 
@@ -39,6 +40,9 @@
 * [`docs/REVIEW_PHASE3.md`](docs/REVIEW_PHASE3.md)：Phase 3 獨立複檢的回應與修正
 * [`docs/PHASE4.md`](docs/PHASE4.md)：Phase 4 交付說明（公開流程、快照選取、資料安全、升級、教師驗收步驟）
 * [`docs/REVIEW_HANDOFF_PHASE4.md`](docs/REVIEW_HANDOFF_PHASE4.md)：Phase 4 複檢交接
+* [`docs/PHASE5.md`](docs/PHASE5.md)：Phase 5 上線準備與整堂課驗收（修正、驗證結果、實機人工驗收表）
+* [`docs/REVIEW_HANDOFF_PHASE5.md`](docs/REVIEW_HANDOFF_PHASE5.md)：Phase 5 複檢交接
+* [`docs/TEACHER_CHECKLIST.md`](docs/TEACHER_CHECKLIST.md)：教師課前檢查表
 
 ## 目錄
 
