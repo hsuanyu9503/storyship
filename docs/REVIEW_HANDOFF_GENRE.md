@@ -119,3 +119,12 @@
 
 修正後重新執行（2026-11-13，本機；只修改 JS／CSS／測試／文件，資料庫測試未重跑）：unit 36、`layout.js` 80、`touch.js` 39、`genre_shots.js` 30、
 `genre_visual_lifecycle.js` 32、`genre_image_retry.js` 26、`e2e.js`（shim）258，全數通過。本機 Supabase（`tests/supabase/e2e_real.sh`）：Realtime 7、touch 39、e2e 258，全數通過。
+
+## 10. 第三次獨立複檢的回應（`87f1853`）
+
+| # | 嚴重度 | 項目 | 在 `87f1853` 上重現？ | 修正 | 測試 |
+|---|---|---|---|---|---|
+| F1 | P3 | 07 極端內容下，投影的重試按鈕超出被壓矮的橫式圖片框而被裁切 | ✅ 重現（1024×768：按鈕 122×44px、圖片框 109×61px；1600×900、1920×1080，有／無句型鷹架共 6 個情境都超出） | `js/lib/render-projection.js` `fit()`：失敗時與框尺寸改變時量測完整按鈕是否落在框內，放不下就加上 `.compact`，改為只有圖示「↻」的 44×44 圓形按鈕（`aria-label`「重新載入圖片」），描述文字保留給螢幕閱讀器；不縮小字級或觸控尺寸。另外，重試開始時也發出 `st-visual` 事件，教師端的「重新載入預覽圖片」在重試中先隱藏 | `genre_visual_lifecycle.js` A 部分新增 07 極端內容（8 張故事＋30 字名稱＋300 字特色，有／無句型鷹架）× 3 種尺寸，並加上「不與其他內容重疊」「中心點可點中」「aria-label」檢查：共 56 項全過；同一支測試在 `87f1853` 上 12 項失敗（6 項極端情境超出圖片框，另 6 項是舊版沒有 `aria-label`） |
+
+修正後重新執行（2026-11-13，本機；只修改 JS／CSS／測試／文件）：unit 36、`layout.js` 80、`touch.js` 39、`genre_shots.js` 30、`genre_visual_lifecycle.js` 56、
+`genre_image_retry.js` 26、`e2e.js`（shim）258，全數通過。這一輪沒有重跑資料庫類測試與本機 Supabase（`e2e_real.sh`）；後者最後一次是在 `87f1853` 執行（全部通過）。
