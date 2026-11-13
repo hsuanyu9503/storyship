@@ -19,10 +19,13 @@
 //   view.cancelGrab(cardId)  伺服器拒絕取得操作權時取消選取／拖曳
 //   variant: 'panel'         左側個人參考面板（單欄、唯讀）
 //
-// 觸控設計：點故事卡內容＝閱讀；拖曳只能從「⠿ 移動」把手開始（把手 touch-action:none，
-// 其他區域可正常捲動）；點一下把手＝選取，再點目標分類＝移動（平板主要操作方式）。
+// 觸控設計：點故事卡內容（編號、圖片、名稱、「閱讀」）＝開啟雙面閱讀卡；拖曳只能從「⠿ 移動」把手開始
+// （把手 touch-action:none，其他區域可正常捲動）；點一下把手＝選取，再點目標分類＝移動（平板主要操作方式）。
+// 選取移動中，閱讀入口暫停（點卡片＝放到該處），避免閱讀與移動互相誤觸。閱讀卡（story.js）只是本機介面，不改變分類。
 import { h, media, confirmDialog } from './dom.js';
 import * as M from './board-model.js';
+import { openStoryReader, storyNo, storyThumb, storyThumbBox } from './story.js';
+import { visualAlive } from './visual.js';
 
 const DRAG_THRESHOLD = 6;
 
@@ -62,6 +65,14 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     noticeSlot, moveBar, h('div.bd-body', left, right));
 
   const boxes = new Map();   // categoryId → { box, input, n, body, del }
+  const numbers = new Map(cards.map((c, i) => [c.id, storyNo(i)]));   // 作品編號 01～（依素材順序）
+  // 看板縮圖：每張故事一個圖片框，重畫時沿用（不重新下載、不閃爍）；圖片框已被釋放時才重建
+  const thumbs = new Map();
+  const thumbOf = (c) => {
+    let t = thumbs.get(c.id);
+    if (!t || !visualAlive(t)) { t = storyThumbBox(c); thumbs.set(c.id, t); }
+    return t;
+  };
 
   // ---------- 點選移動：點目標區域 ----------
   // 以 pointerdown／pointerup 判斷「點一下」，不依賴 click：
@@ -206,8 +217,9 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
           'aria-pressed': selected === c.id ? 'true' : 'false' }, h('span.sc-grip-icon', '⠿'), h('span.sc-grip-label', '移動'));
     const node = h('div.sc.sc-' + variant + (selected === c.id ? '.sc-selected' : '') + (lockedByOther ? '.sc-locked' : ''), { 'data-card': c.id },
       h('button.sc-read', { type: 'button', 'aria-label': `閱讀「${c.title}」`, onclick: () => openReader(c) },
-        media(c.image_url, c.image_alt || '故事圖片', 'sc-img'),
-        h('span.sc-text', h('span.sc-title', c.title), variant === 'full' ? h('span.sc-sum', c.summary) : null)),
+        h('span.sc-img', thumbOf(c)),
+        h('span.sc-text', h('span.sc-no', { 'aria-hidden': 'true' }, numbers.get(c.id) || ''), h('span.sc-title', c.title),
+          h('span.sc-open', { 'aria-hidden': 'true' }, '閱讀'))),
       grip);
     if (grip && !lockedByOther) attachGrip(grip, c);
     return node;
@@ -249,7 +261,7 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     onGrab(c.id);
     moveBar.hidden = true;
     el.classList.remove('bd-moving');
-    const ghost = h('div.sc-ghost', media(c.image_url, '', 'sc-img'), h('span', c.title));
+    const ghost = h('div.sc-ghost', media(storyThumb(c.image_url), '', 'sc-img'), h('span', c.title));
     document.body.append(ghost);
     drag.ghost = ghost;
     el.classList.add('bd-dragging');
@@ -299,22 +311,11 @@ export function createBoardView({ cards, title = '我的故事分類', categorie
     else { onRelease(d.id); render(); }
   }
 
-  // ---------- 閱讀視窗（不改變分類，關閉後回到原位置） ----------
+  // ---------- 閱讀卡（不改變分類、不送出請求；關閉後回到原位置，焦點回到該張的「閱讀」） ----------
   function openReader(c) {
-    if (drag?.active) return;
-    const close = () => { dlg.close(); dlg.remove(); };
-    const dlg = h('dialog.reader',
-      h('div.reader-inner',
-        media(c.image_url, c.image_alt || '故事圖片', 'reader-img'),
-        h('h2.reader-title', c.title),
-        c.summary ? h('p.reader-sum', c.summary) : null,
-        h('div.reader-detail', c.detail || '')),
-      h('div.reader-actions', h('button.primary.s-big', { type: 'button', onclick: close }, '關閉')));
-    dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
-    dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });
-    document.body.append(dlg);
-    dlg.showModal();
-    dlg.querySelector('.reader-inner').scrollTop = 0;
+    if (drag?.active || selected) return;
+    openStoryReader(c, { no: numbers.get(c.id) || '',
+      returnFocus: () => el.querySelector(`[data-card="${c.id}"] .sc-read`) });
   }
 
   // ---------- 繪製 ----------

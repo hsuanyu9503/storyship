@@ -3,3 +3,4 @@ tests/e2e/.cache/
 package-lock.json
 .DS_Store
 tests/supabase/.state/
+__pycache__/

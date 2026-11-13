@@ -49,6 +49,15 @@ alter table public.session_state add column if not exists disclosure jsonb not n
 alter table public.genres add column if not exists visual_landscape_url text;
 alter table public.content_sets add column if not exists genre_teacher_guide jsonb;
 
+-- 故事卡正式教材（2026-11）：「值得留意的故事元素」（可重複執行；舊資料為空陣列，背面不顯示元素區）
+--   story_cards.elements：字串陣列，依文件順序，例如 ["神奇零食","實現願望"]；只是閱讀提示，不代表分類答案
+alter table public.story_cards add column if not exists elements jsonb not null default '[]'::jsonb;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'story_cards_elements_array') then
+    alter table public.story_cards add constraint story_cards_elements_array check (jsonb_typeof(elements) = 'array');
+  end if;
+end $$;
+
 -- =====================================================================
 -- 鎖定協定（Phase 3 複檢後整理；所有寫入路徑都遵守）
 --   1. sessions 列：教師以 FOR NO KEY UPDATE 鎖定（同一場次的教師操作依序執行）。
@@ -429,7 +438,7 @@ begin
     from public.session_state st join public.sessions s on s.id = st.session_id where st.session_id = p_session;
   if v_phase < '03' then raise exception 'NOT_AVAILABLE'; end if;
   return coalesce((select jsonb_agg(jsonb_build_object('id', id, 'title', title, 'summary', summary,
-            'detail', detail, 'image_url', image_url, 'image_alt', image_alt) order by sort_order, slug)
+            'detail', detail, 'image_url', image_url, 'image_alt', image_alt, 'elements', elements) order by sort_order, slug)
            from public.story_cards where content_set_id = v_set), '[]'::jsonb);
 end $$;
 
@@ -1554,12 +1563,13 @@ union all
 select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
         where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev')
 union all
-select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充）',
+select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充、故事元素）',
        (select count(*) from information_schema.columns where table_schema = 'public'
           and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
             or (table_name = 'group_category_tombstones' and column_name = 'result')
             or (table_name = 'genres' and column_name = 'visual_landscape_url')
-            or (table_name = 'content_sets' and column_name = 'genre_teacher_guide'))) = 5
+            or (table_name = 'content_sets' and column_name = 'genre_teacher_guide')
+            or (table_name = 'story_cards' and column_name = 'elements'))) = 6
        and to_regprocedure('app.genre_visual(text,text,text)') is not null
        and not has_function_privilege('anon', 'app.genre_visual(text,text,text)', 'execute')
 union all

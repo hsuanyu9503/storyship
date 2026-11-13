@@ -27,6 +27,7 @@
 | 3 | `supabase/migrations/003_security.sql` | RLS 與權限 | 是（重跑 002 後**一定要**重跑） |
 | 4 | `supabase/seed/001_placeholder_content.sql` | 佔位素材（故事 A～H、兩個探索故事、五種小說類型的佔位文字） | 是（以 slug 更新，不會重複新增） |
 | 5 | `supabase/content/genre_materials_v1.sql` | 小說類型正式教材（名稱、常見特色、教師補充、圖片；見 `docs/GENRE_MATERIALS.md`） | 是（結果相同） |
+| 6 | `supabase/content/story_cards_v1.sql` | 第 03、04 環節的故事卡正式教材（八部作品的名稱、故事介紹、故事元素、圖片；見 `docs/STORY_CARDS.md`） | 是（結果相同） |
 
 每個檔案執行後應顯示 `Success. No rows returned`。最後執行 `supabase/checks/verify.sql`，每一列的 `ok` 都應為 `true`。
 
@@ -114,7 +115,7 @@ python3 -m http.server 8080
 
 | 資料表 | 圖片欄位 |
 |---|---|
-| `story_cards` | `image_url`（故事卡圖片） |
+| `story_cards` | `image_url`（故事卡圖片；正式教材為 `assets/stories/story-NN.webp`，網站會自動使用同名的 `-600w` 縮圖）；`elements`（故事元素，字串陣列，例如 `["神奇零食","實現願望"]`；空陣列時背面不顯示元素區） |
 | `intro_stories` | `background_url`（情境背景）、`image_url`（故事代表圖片） |
 | `intro_clues` | `image_url`（人物／物件插畫） |
 | `genres` | `visual_url`（06 直式主圖）、`visual_landscape_url`（07 橫式圖，可留空：留空時 07 改用直式主圖完整呈現）；`elements[].icon`（選用；沒有時顯示編號） |
@@ -244,4 +245,41 @@ Phase 5 **沒有任何資料庫變更**（`supabase/` 與 Phase 4 完全相同�
 
 * 教材：SQL Editor 執行 `supabase/content/genre_materials_v1_rollback.sql`（還原到第一次執行教材腳本前的內容；同樣的保護）。
 * 網站：GitHub 上 Revert 該次合併。新欄位保留不影響舊網站。
+* **不要**重跑 `supabase/seed/001_placeholder_content.sql`（會把故事與類型改回佔位文字）。
+
+---
+
+## I. 故事卡正式教材（第 03、04 環節）
+
+內容：八部作品的名稱、故事介紹（逐字取自 Word 原稿）、值得留意的故事元素與圖片；學生看板改為小型正面卡，點「閱讀」開啟雙面閱讀卡。
+對照、圖片清單與待確認事項見 [`STORY_CARDS.md`](STORY_CARDS.md)。
+
+### 順序（請在沒有課堂時進行）
+
+1. **資料庫結構**：SQL Editor 執行 `supabase/upgrade/upgrade.sql`（新增 `story_cards.elements`，學生讀取時一併回傳；可重複執行；17 列 `ok` 皆為 `true`）。
+2. **網站**：合併到 `main`，等 GitHub Pages 部署完成（`assets/stories/*.webp` 隨網站一起部署；`source-assets/` 是原始檔，網站不使用）。
+3. **教材**：SQL Editor 執行 `supabase/content/story_cards_v1.sql`。最後的結果表應為八列（story-a → story-h），`ok` 都是 `true`。
+4. 所有裝置重新整理；用學生端（或教師的小組看板）打開幾張故事，確認圖片、名稱、全文與元素。
+
+依設計，新網站遇到尚未升級的資料庫時，閱讀卡背面只是沒有元素區；舊網站遇到新資料庫仍顯示原本的單面閱讀視窗。這兩種混搭**沒有以瀏覽器實測**，請不要在上課前留在混搭狀態。步驟 3 必須在步驟 1 之後（腳本會檢查）。
+
+### 教材腳本的保護（任何一項不符合就整筆中止，資料庫不變）
+
+* 只更新預設素材組中 slug 為 `story-a`～`story-h` 的八張故事卡（一對一：story-a → 01 神奇柑仔店 … story-h → 08 倚天屠龍記）；不新增、不刪除、不改 id、slug 與排序。
+* 故事卡順序必須正好是 story-a → story-h（畫面上的編號 01～08 依這個順序）。
+* 有使用這份素材、2 小時內仍有動作的進行中場次時中止。這只是**預檢**，不是維護鎖：檢查之後才開始的上課操作不會被擋下，所以請在沒有課堂時執行。
+  確認沒有課堂後，可結束那些場次再執行，或把腳本開頭的 `allow_during_class` 改成 `true`。
+* 第一次執行時把原本的內容備份到 `app.story_card_backups`（前端讀不到）。
+* 不重新執行佔位 seed，也不會碰小說類型教材（`genres`）。
+
+### 對既有場次與已保存成果的影響
+
+* 分類、提交與快照都以故事 **id** 記錄，名稱與圖片在顯示時才讀取：更新後，舊場次的個人／小組成果、教師檢視與之後的 05／07 投影都會顯示新的作品名稱與圖片，分類內容不變。
+* 不改寫任何場次的學生資料、快照或已保存的投影。已公開在投影上的 05／07 畫面保留舊名稱，直到教師重新公開。
+* 原本的「故事 A～H」摘要（summary）會清空：正式教材沒有另寫摘要，看板只顯示編號、圖片與名稱。
+
+### 回復
+
+* 教材：SQL Editor 執行 `supabase/content/story_cards_v1_rollback.sql`（還原到第一次執行教材腳本前的內容；同樣的保護）。
+* 網站：GitHub 上 Revert 該次合併。`elements` 欄位保留不影響舊網站。
 * **不要**重跑 `supabase/seed/001_placeholder_content.sql`（會把故事與類型改回佔位文字）。
