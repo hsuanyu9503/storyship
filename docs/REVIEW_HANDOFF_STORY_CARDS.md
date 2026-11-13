@@ -57,9 +57,27 @@
 4. 看板縮圖重用（`thumbs`）在小組同步重畫、拖曳中延後重畫、唯讀切換時是否正確；被移除的卡（例如教師檢視關閉）是否釋放。
 5. 選取移動時點閱讀入口＝放到該區（既有行為），是否會讓學生困惑。
 
-## 6. 實際執行的測試
+## 6. 實際執行的測試（2026-11-13，本機；觸控皆為 Playwright 模擬）
 
-見 PR 說明（同一份結果），以及下方。
+| 指令 | 結果 | 備註 |
+|---|---|---|
+| `npm run test:unit` | 41 通過 | 含新的 `story.test.mjs`（5 項） |
+| `npm run test:db` | 340 項 ok，全部通過 | 含 `story_cards.sh` 8 項 |
+| `npm run test:race`／`test:upgrade`／`test:concurrency` | 16／28／通過 | upgrade 含第 9 節（從已部署的 df6fcd8＋停在 04 的場次升級、再套用教材） |
+| `tests/e2e/e2e.js`（shim，佔位故事 A～H） | 258 通過 | 舊資料相容路徑（沒有元素、沒有圖片） |
+| `layout.js`／`touch.js` | 80／39 通過 | |
+| `genre_shots.js`／`genre_visual_lifecycle.js`／`genre_image_retry.js` | 30／56／26 通過 | 圖片框抽成 `visual.js` 後的回歸 |
+| `tests/e2e/story_reader.js`（sf_story） | 109 通過 | 最後一次在 3:2 圖片裁切修正之後執行 |
+| `tests/supabase/run.sh`（本機 Supabase 堆疊） | 72 項 ok，全部通過 | 含故事卡教材腳本與 3 項真實 PostgREST 檢查 |
+| `tests/supabase/e2e_real.sh` | Realtime 7、touch 39、e2e 258 通過 | |
+
+在 3:2 圖片修正（只改 `.st-visual.story img` 的 CSS 與 `story_reader.js`）之後重新執行的是 `story_reader.js`、`story_shots.js` 與 Supabase 兩套；
+其餘套件是在修正之前執行（佔位資料沒有故事圖片，不經過該 CSS）。
+
+開發中發現並修正（測試已涵蓋）：
+
+* Tab 可以把焦點移出對話框（Chromium 允許移到瀏覽器介面）→ 加上 Tab 循環。
+* 3:2 的《神奇柑仔店》在 16:9 外框中被上下裁切（圖片元素取自身高度，外框 overflow 裁掉）→ 圖片絕對定位填滿外框再 contain；測試改為量測實際畫出的區域。
 
 ## 7. 尚未驗證
 
