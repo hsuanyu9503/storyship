@@ -29,6 +29,9 @@ fresh
 for f in "$ROOT"/supabase/migrations/00{1,2,3}_*.sql "$ROOT/supabase/seed/001_placeholder_content.sql"; do psql_ -f "$f" >/dev/null 2>"$TMP/err" || { cat "$TMP/err"; fail "安裝失敗：$f"; }; done
 verify17 || fail "全新安裝後 verify.sql 未全數通過"
 echo "ok - 全新安裝（以 postgres 角色執行 001→002→003→seed）：verify.sql 17 項全為 true"
+psql_ -f "$ROOT/supabase/content/genre_materials_v1.sql" > "$TMP/content" 2>&1 || { cat "$TMP/content"; fail "小說類型教材腳本失敗"; }
+[ "$(grep -c '|t$' "$TMP/content")" = "5" ] || { cat "$TMP/content"; fail "教材腳本結果不是 5 列 true"; }
+echo "ok - 小說類型教材腳本（以 postgres 角色、Supabase 預設權限）：五類更新完成"
 for f in "$ROOT"/supabase/migrations/00{2,3}_*.sql; do psql_ -f "$f" >/dev/null 2>&1 || fail "重複執行失敗：$f"; done
 verify17 || fail "重複執行 002／003 後檢查未通過"
 echo "ok - 重複執行 002、003 後仍全數通過"

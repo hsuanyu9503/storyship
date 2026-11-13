@@ -25,12 +25,22 @@ function side(s, categories, extra = {}) {
     total: 20, page: 0, pages: 5, focus: false, unplaced_count: 0, track: { where: NAME30, unplaced: false }, categories, ...extra };
 }
 const compare = (sides, zoom = false) => ({ screen: 'compare', title: '分類成果大公開', story: { title: TITLES[0] }, zoom, sides });
-const match = (cardsN, reason, scaffold = true) => ({
+const match = (cardsN, reason, scaffold = true, reasonText = REASON300) => ({
   screen: 'match', title: '小小故事分類師', group: { group: '第 1 組', number: 1, kind: 'submitted', complete: true },
-  category: { label: NAME30, unnamed: false, cards: TITLES.slice(0, cardsN).map((t) => card(t)), reason_state: reason ? 'shown' : 'hidden', ...(reason ? { reason: REASON300 } : {}) },
-  genre: { name: '偵探小說', visual_url: null, elements: [0, 1, 2].map((i) => ({ slot: i, revealed: true, label: ['神祕案件', '尋找線索', '推理解謎'][i], icon: '❓', highlight: i === 0 })) },
+  category: { label: NAME30, unnamed: false, cards: TITLES.slice(0, cardsN).map((t) => card(t)), reason_state: reason ? 'shown' : 'hidden', ...(reason ? { reason: reasonText } : {}) },
+  genre: { name: '武俠', visual_url: 'assets/genres/wuxia-landscape.webp', visual_source: 'landscape',
+           elements: [0, 1, 2].map((i) => ({ slot: i, revealed: true, label: WUXIA[i], icon: '', highlight: i === 0 })) },
   scaffold,
 });
+// 小說類型教材（supabase/content/genre_materials_v1.sql）：特色文字最長的是武俠
+const WUXIA = ['多以古代為背景', '俠客、門派或幫派', '人物與群體間的恩怨'];
+const GENRES = [['奇幻', ['不同於現實的時空', '魔法或超自然力量', '神祕奇異的事物']], ['偵探', ['離奇事件與謎團', '敏銳觀察與分析', '透過推理解開謎題']],
+  ['歷史', ['歷史事件或人物', '特定的歷史時期', '當時的社會風貌']], ['冒險', ['不尋常的冒險經歷', '遭遇危險與困難', '運用智慧克服困難']], ['武俠', WUXIA]];
+const SLUGS = ['fantasy', 'detective', 'historical', 'adventure', 'wuxia'];
+const genre06 = (i) => ({ screen: 'genre', view: 'genre', index: i, total: 5, genre: { name: GENRES[i][0], visual_url: `assets/genres/${SLUGS[i]}-portrait.webp`,
+  visual_source: 'portrait', elements: GENRES[i][1].map((label) => ({ label, icon: '' })) } });
+const overview = (hideFrom = 5) => ({ screen: 'genre', view: 'overview', genres: GENRES.map(([name, els], i) => ({ name, visual_url: null,
+  elements: els.map((label, k) => (i >= hideFrom && k > 0 ? { hidden: true } : { label, icon: '' })) })) });
 
 const SCENARIOS = {
   '05 雙組・每頁 4 類・全部揭露理由（上限）': compare([side('left', cats(4)), side('right', cats(4))]),
@@ -46,19 +56,26 @@ const SCENARIOS = {
   '05 放大單側・每頁 2 類・理由（每類 2 張）': compare([side('left', cats(2), { per: 2 })], true),
   '05 雙組・每頁 2 類・理由未揭露（每類 4 張）': compare([side('left', cats(2, { cardsPer: 4, reason: 'hidden' })), side('right', cats(2, { cardsPer: 4, reason: 'hidden' }))]),
   '05 雙組・每頁 1 類・理由未揭露＋8 張故事': compare([side('left', cats(1, { cardsPer: 8, reason: 'hidden' })), side('right', cats(1, { cardsPer: 8, reason: 'hidden' }))]),
+  '06 武俠（最長的常見特色）＋直式主圖': genre06(4),
+  '06 偵探＋直式主圖': genre06(1),
+  '06 小說類型總覽（五類全部揭露）': overview(),
+  '06 小說類型總覽（後兩類只揭露一項）': overview(3),
   '07 8 張故事＋理由＋句型鷹架': match(8, true),
+  '07 4 張故事＋150 字理由＋句型鷹架': match(4, true, true, REASON300.slice(0, 150)),
   '07 8 張故事＋理由（句型鷹架關閉）': match(8, true, false),
   '07 8 張故事＋句型鷹架（理由未顯示）': match(8, false),
 };
 
+// 07「30 字分類名稱＋8 張故事＋300 字理由＋句型鷹架」四項同時達到上限時放不下：教師預覽必須提醒（關閉句型鷹架即完整可見，見下方必須完整的情境）
 const MUST_FIT = new Set(['05 放大單側・每頁 1 類・理由＋8 張故事', '05 放大單側・聚焦一類・理由＋8 張故事',
   '05 雙組・每頁 1 類・理由未揭露＋8 張故事', '05 雙組・每頁 2 類・理由未揭露（每類 4 張）',
-  '07 8 張故事＋理由＋句型鷹架', '07 8 張故事＋理由（句型鷹架關閉）', '07 8 張故事＋句型鷹架（理由未顯示）']);
+  '07 4 張故事＋150 字理由＋句型鷹架', '07 8 張故事＋理由（句型鷹架關閉）', '07 8 張故事＋句型鷹架（理由未顯示）',
+  '06 武俠（最長的常見特色）＋直式主圖', '06 偵探＋直式主圖', '06 小說類型總覽（五類全部揭露）', '06 小說類型總覽（後兩類只揭露一項）']);
 
 (async () => {
   const browser = await chromium.launch();
   const results = [];
-  for (const [w, hgt] of [[1920, 1080], [1280, 720], [1024, 768]]) {
+  for (const [w, hgt] of [[1920, 1080], [1600, 900], [1280, 720], [1024, 768]]) {
     const page = await browser.newPage({ viewport: { width: w, height: hgt } });
     await page.goto(BASE + '/projector.html');
     for (const [label, projection] of Object.entries(SCENARIOS)) {
@@ -68,9 +85,11 @@ const MUST_FIT = new Set(['05 放大單側・每頁 1 類・理由＋8 張故事
         wrap.append(renderProjection({ projection, status: 'active' }, { showQr: false }));
         document.body.replaceChildren(wrap);
         await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+        // 等圖片載入（類型圖片框的比例固定，載入前後版面不應改變；這裡等它載入後再量）
+        for (let i = 0; i < 40 && [...wrap.querySelectorAll('img')].some((im) => !im.complete || !im.naturalWidth); i++) await new Promise((r) => setTimeout(r, 100));
         const stage = wrap.querySelector('.stage').getBoundingClientRect();
         // 內容元素：每一個都要完整落在投影範圍與所有會裁切的祖先範圍內
-        const sel = '.st-match-reason, .st-cat-name, .st-chip-card, .st-cat-reason, .st-match-card, .st-match-el, .st-scaffold, .st-side-track, .st-match-gname, .st-cmp-track';
+        const sel = '.st-feature, .st-ov-name, .st-ov-card li, .st-visual, .st-match-reason, .st-cat-name, .st-chip-card, .st-cat-reason, .st-match-card, .st-match-el, .st-scaffold, .st-side-track, .st-match-gname, .st-cmp-track';
         const clipped = [];
         for (const el of wrap.querySelectorAll(sel)) {
           const b = el.getBoundingClientRect();
@@ -85,15 +104,35 @@ const MUST_FIT = new Set(['05 放大單側・每頁 1 類・理由＋8 張故事
           if (b.bottom > box.bottom + 1 || b.top < box.top - 1 || b.right > box.right + 1 || b.left < box.left - 1 || el.scrollHeight > el.clientHeight + 2) {
             clipped.push(`${el.className}「${el.textContent.slice(0, 12)}…」`);
           }
+          // 不能超出自己所在的面板（overflow: visible 時會跑到面板外、被其他區塊蓋住），也不能壓到句型鷹架或理由列
+          const panel = el.parentElement?.closest('.st-match-left, .st-match-right, .st-side, .st-ov-card');
+          if (panel) {
+            const pr = panel.getBoundingClientRect();
+            if (b.bottom > pr.bottom + 1 || b.top < pr.top - 1 || b.right > pr.right + 1 || b.left < pr.left - 1) clipped.push(`${el.className}「${el.textContent.slice(0, 12)}…」超出面板`);
+          }
+          for (const o of wrap.querySelectorAll('.st-scaffold, .st-match-reason')) {
+            if (o === el || o.contains(el) || el.contains(o)) continue;
+            const r = o.getBoundingClientRect();
+            if (b.left < r.right - 1 && b.right > r.left + 1 && b.top < r.bottom - 1 && b.bottom > r.top + 1) clipped.push(`${el.className}「${el.textContent.slice(0, 12)}…」與 ${o.className} 重疊`);
+          }
         }
-        const fonts = [...wrap.querySelectorAll('.st-cat-reason, .st-chip-card, .st-match-card')].map((e) => parseFloat(getComputedStyle(e).fontSize));
+        const fonts = [...wrap.querySelectorAll('.st-cat-reason, .st-chip-card, .st-match-card, .st-feature, .st-ov-card li, .st-match-el')].map((e) => parseFloat(getComputedStyle(e).fontSize));
         // 教師預覽使用的同一個偵測（js/teacher/results.js fitCheck）
         const st = wrap.querySelector('.stage');
         const detected = [st, ...st.querySelectorAll('.st-cats, .st-side, .st-match-left, .st-match-right, .st-cmp-body, .st-match-body')]
           .some((e) => e.scrollHeight > e.clientHeight + 2);
-        return { clipped, detected, minFontPx: fonts.length ? Math.min(...fonts) : null, stageW: stage.width };
+        // 類型圖片：完整呈現（contain）、框的比例正確、沒有扭曲
+        const vis = [...wrap.querySelectorAll('.st-visual')].map((v) => {
+          const im = v.querySelector('img'); const r = v.getBoundingClientRect();
+          return { slot: v.classList.contains('portrait') ? 'portrait' : 'landscape', ratio: r.width / r.height, fit: im ? getComputedStyle(im).objectFit : 'none', loaded: Boolean(im?.naturalWidth), src: im?.currentSrc?.replace(/^.*\//, '') };
+        });
+        return { vis, clipped, detected, minFontPx: fonts.length ? Math.min(...fonts) : null, stageW: stage.width };
       }, projection);
       results.push({ size: `${w}x${hgt}`, label, ...r });
+      for (const v of r.vis || []) {
+        if (!v.loaded || v.fit !== 'contain' || (v.slot === 'portrait' && Math.abs(v.ratio - 0.75) > 0.01)) r.clipped.push(`圖片框 ${v.slot} 比例 ${v.ratio.toFixed(3)}、${v.fit}、載入 ${v.loaded}`);
+      }
+      if (w === 1920) await page.waitForTimeout(350);   // 圖片淡入動畫結束後再截圖
       if (w === 1920) await page.screenshot({ path: path.join(OUT, `layout-${label.replace(/[^\w一-鿿]+/g, '_')}.png`) });
     }
     await page.close();
@@ -108,7 +147,7 @@ const MUST_FIT = new Set(['05 放大單側・每頁 1 類・理由＋8 張故事
     const okk = must ? !clipped : (!clipped || r.detected) && r.detected === clipped;
     if (!okk) bad++;
     console.log(`${okk ? 'ok' : 'FAIL'} - ${r.size} ${r.label}：${clipped ? `會裁切 ${r.clipped.length} 個元素（${r.detected ? '教師預覽會提醒' : '教師預覽沒有偵測到！'}）` : '完整可見'}`
-      + `${must ? '［必須完整］' : ''}（最小字級 ${r.minFontPx?.toFixed(1)}px）`);
+      + `${must ? '［必須完整］' : ''}（最小字級 ${r.minFontPx?.toFixed(1)}px）` + (clipped ? '：' + r.clipped.slice(0, 4).join('；') : ''));
   }
   if (bad && !process.env.LAYOUT_REPORT) process.exitCode = 1;
 })();

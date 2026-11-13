@@ -9,6 +9,7 @@ bash "$HERE/up.sh" down >/dev/null; bash "$HERE/up.sh" >/dev/null
 set -a; . "$STATE/env"; set +a
 psql_() { PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -t -A -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$DB_PORT" -U postgres -d postgres "$@"; }
 for f in "$ROOT"/supabase/migrations/00{1,2,3}_*.sql "$ROOT/supabase/seed/001_placeholder_content.sql"; do psql_ -f "$f" >/dev/null 2>&1; done
+psql_ -f "$ROOT/supabase/content/genre_materials_v1.sql" >/dev/null 2>&1 || { echo "小說類型教材腳本失敗"; exit 1; }
 # 測試教師：以 GoTrue 註冊（隨機密碼，只存在這次的容器），再依 supabase/setup/add_teacher.sql 的方式加入白名單
 EMAIL="e2e-teacher@example.test"; PASS=$(node -e "console.log(require('crypto').randomBytes(12).toString('hex'))")
 curl -s -o /dev/null -X POST "http://localhost:$GATEWAY_PORT/auth/v1/signup" -H "apikey: $ANON_KEY" -H 'Content-Type: application/json' \

@@ -43,6 +43,8 @@
 * [`docs/PHASE5.md`](docs/PHASE5.md)：Phase 5 上線準備與整堂課驗收（修正、驗證結果、實機人工驗收表）
 * [`docs/REVIEW_HANDOFF_PHASE5.md`](docs/REVIEW_HANDOFF_PHASE5.md)：Phase 5 複檢交接
 * [`docs/TEACHER_CHECKLIST.md`](docs/TEACHER_CHECKLIST.md)：教師課前檢查表
+* [`docs/GENRE_MATERIALS.md`](docs/GENRE_MATERIALS.md)：小說類型教材（06／07 正式文字、圖片、教師補充、相容策略）
+* [`docs/REVIEW_HANDOFF_GENRE.md`](docs/REVIEW_HANDOFF_GENRE.md)：小說類型教材複檢交接
 
 ## 目錄
 

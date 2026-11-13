@@ -289,15 +289,17 @@ export function createResults(ctx) {
           gs.map((g, i) => h('button.genre-btn' + (d.genre === i ? '.sel' : '') + (disclosed.has(i) ? '.pub' : ''), { type: 'button', onclick: () => setDraft('07', R.setGenre(d, i)) },
             `${i + 1}. ${g.name}`, disclosed.has(i) ? ' ✓' : ''))),
         h('p.muted.small', '✓＝已在 06 或 07 公開過的類型。選了未公開過的類型，按「公開到投影」時才會揭曉。')),
-      genre ? h('div.rs-side', h('h4', `③ ${genre.name} 的核心要素（逐一揭露、標示相似）`),
+      genre ? h('div.rs-side', h('h4', `③ ${genre.name} 的常見特色（逐一揭露、標示相似）`),
+        genre.teacher_notes ? h('div.teacher-note', h('b', '教師補充（不會投影）'), h('p', genre.teacher_notes)) : null,
         h('div.rs-els', (genre.elements || []).slice(0, 3).map((e, i) => h('div.rs-el',
-          h('label', h('input', { type: 'checkbox', checked: d.elements.includes(i), onchange: () => setDraft('07', R.toggleElement(d, i)) }), `揭露：${e.icon || ''} ${e.label}`),
+          h('label', h('input', { type: 'checkbox', checked: d.elements.includes(i), onchange: () => setDraft('07', R.toggleElement(d, i)) }), `揭露：${e.icon ? e.icon + ' ' : ''}${e.label}`),
           h('label', h('input', { type: 'checkbox', disabled: !d.elements.includes(i), checked: d.highlights.includes(i), onchange: () => setDraft('07', R.toggleHighlight(d, i)) }), '標示相似'))))) : null,
       h('div.rs-bar',
         h('label', h('input', { type: 'checkbox', checked: d.scaffold, onchange: (e) => setDraft('07', { ...d, scaffold: e.target.checked }) }), '顯示句型鷹架'),
         h('button', { type: 'button', onclick: () => setDraft('07', R.emptyMatch()) }, '清除對照')),
       statusBar('07'),
-      h('p.muted', '不會自動配對、評分或改名；是否接近、接近哪一種，由全班討論。'));
+      h('p.muted', '不會自動配對、評分或改名；是否接近、接近哪一種，由全班討論。'),
+      ctx.teacherGuide ? ctx.teacherGuide(S.content.genreGuide) : null);
   }
 
   // 候選 B：預覽與投影用同一個繪製函式與以畫面寬度為單位的字級，預覽放不下＝投影也放不下。

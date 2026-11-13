@@ -25,7 +25,8 @@
 | 1 | `supabase/migrations/001_init.sql` | 資料表、內部函式、觸發器 | **否**（只執行一次） |
 | 2 | `supabase/migrations/002_rpc.sql` | 所有 RPC | 是（日後修正函式時只需重跑此檔） |
 | 3 | `supabase/migrations/003_security.sql` | RLS 與權限 | 是（重跑 002 後**一定要**重跑） |
-| 4 | `supabase/seed/001_placeholder_content.sql` | 佔位素材（故事 A～H、兩個探索故事、五種小說類型） | 是（以 slug 更新，不會重複新增） |
+| 4 | `supabase/seed/001_placeholder_content.sql` | 佔位素材（故事 A～H、兩個探索故事、五種小說類型的佔位文字） | 是（以 slug 更新，不會重複新增） |
+| 5 | `supabase/content/genre_materials_v1.sql` | 小說類型正式教材（名稱、常見特色、教師補充、圖片；見 `docs/GENRE_MATERIALS.md`） | 是（結果相同） |
 
 每個檔案執行後應顯示 `Success. No rows returned`。最後執行 `supabase/checks/verify.sql`，每一列的 `ok` 都應為 `true`。
 
@@ -116,7 +117,7 @@ python3 -m http.server 8080
 | `story_cards` | `image_url`（故事卡圖片） |
 | `intro_stories` | `background_url`（情境背景）、`image_url`（故事代表圖片） |
 | `intro_clues` | `image_url`（人物／物件插畫） |
-| `genres` | `visual_url`（小說類型主視覺）；`elements[].icon`（要素圖示） |
+| `genres` | `visual_url`（06 直式主圖）、`visual_landscape_url`（07 橫式圖，可留空：留空時 07 改用直式主圖完整呈現）；`elements[].icon`（選用；沒有時顯示編號） |
 
 故事卡數量、探索故事數量、每個故事的線索數量都可以任意增減。
 **上課中請勿刪除故事卡**，否則該卡片的分類紀錄會一起刪除。
@@ -210,3 +211,37 @@ Phase 5 **沒有任何資料庫變更**（`supabase/` 與 Phase 4 完全相同�
 * 在**隔離的本機 Supabase**（Supabase 官方 Postgres 映像檔、GoTrue、PostgREST、Realtime；`tests/supabase/`）驗證了：
   全新安裝、從 Phase 3＋上課中資料升級、重複執行、回復到 Phase 3、再升級；權限邊界與 Realtime 中斷恢復。
 * **尚未在正式（雲端）Supabase 專案驗證**。正式專案上線前請在**另一個測試專案**依上面的順序執行一次，並完成 `docs/PHASE5.md` 第七節的人工驗收表。
+
+---
+
+## H. 小說類型正式教材（第 06、07 環節）
+
+內容：五種類型的顯示名稱（奇幻、偵探、歷史、冒險、武俠）、常見特色、教師補充與直式／橫式圖片。對照見 [`GENRE_MATERIALS.md`](GENRE_MATERIALS.md)。
+
+### 順序（請在沒有課堂時進行）
+
+1. **資料庫結構**：SQL Editor 執行 `supabase/upgrade/upgrade.sql`（新增 `genres.visual_landscape_url`、`content_sets.genre_teacher_guide` 與圖片來源規則；可重複執行；17 列 `ok` 皆為 `true`）。
+2. **網站**：合併到 `main`，等 GitHub Pages 部署完成（圖片檔 `assets/genres/*.webp` 隨網站一起部署）。
+3. **教材**：SQL Editor 執行 `supabase/content/genre_materials_v1.sql`。最後的結果表應為五列（fantasy → wuxia），`ok` 都是 `true`。
+4. 所有裝置重新整理；用教師端 06 私下預覽每一種類型，確認名稱、三項常見特色、圖片與教師補充。
+
+建議依 1 → 2 → 3 的順序。依設計，新網站遇到尚未升級的資料庫時只是沒有橫式圖與教師共同補充（07 改用直式圖），舊網站遇到新資料庫也能顯示；但這兩種混搭**沒有以瀏覽器實測**，請不要在上課前留在混搭狀態。步驟 3 必須在步驟 1 之後（腳本會檢查）。
+
+### 教材腳本的保護（任何一項不符合就整筆中止，資料庫不變）
+
+* 只更新預設素材組中 slug 為 fantasy、detective、historical、adventure、wuxia 的五筆；不新增、不刪除、不改 id 與排序。
+* 類型順序必須正好是 fantasy → detective → historical → adventure → wuxia（揭露紀錄以索引記錄，順序不同會錯置）。
+* 有使用這份素材、2 小時內仍有動作的進行中場次時中止（可能正在上課）。確認沒有課堂後，可結束那些場次再執行，或把腳本開頭的 `allow_during_class` 改成 `true`。
+* 第一次執行時把原本的內容備份到 `app.genre_material_backups`（前端讀不到）。
+
+### 對既有場次的影響
+
+* 素材由同一素材組的所有場次共用：更新後，所有場次的教師端與**之後**的投影都使用新教材。
+* 不改寫任何場次的學生資料、快照、揭露紀錄或已保存的投影。已公開在投影上的舊文字會保留到教師重新切換或公開該畫面；
+  返回 06／07 時伺服器依原本的選擇與揭露範圍（類型索引、已揭露的特色索引不變）以新教材重建。
+
+### 回復
+
+* 教材：SQL Editor 執行 `supabase/content/genre_materials_v1_rollback.sql`（還原到第一次執行教材腳本前的內容；同樣的保護）。
+* 網站：GitHub 上 Revert 該次合併。新欄位保留不影響舊網站。
+* **不要**重跑 `supabase/seed/001_placeholder_content.sql`（會把故事與類型改回佔位文字）。

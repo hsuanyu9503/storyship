@@ -103,9 +103,19 @@ export function genreSub(g) {
   return g.view === 'recap' ? '06-01' : g.view === 'overview' ? '06-03' : '06-02';
 }
 
+// 類型圖片的來源選擇：與伺服器 app.genre_visual 完全相同（06＝直式優先、07＝橫式優先；缺圖時互相回退）
+export function genreVisual(x, prefer) {
+  const p = (x?.visual_url || '').trim(); const l = (x?.visual_landscape_url || '').trim();
+  if (prefer === 'landscape' && l) return { visual_url: l, visual_source: 'landscape' };
+  if (p) return { visual_url: p, visual_source: 'portrait' };
+  if (l) return { visual_url: l, visual_source: 'landscape' };
+  return { visual_url: null, visual_source: null };
+}
+
+// 06 公開資料（教師端私下預覽用；公開時由伺服器 app.genre_build 產生同樣的內容）
 function genrePublic(x) {
-  return { name: x.name, visual_url: x.visual_url || null,
-           elements: (x.elements || []).slice(0, 3).map((e) => ({ label: e.label, icon: e.icon || '' })) };
+  return { name: x.name, elements: (x.elements || []).slice(0, 3).map((e) => ({ label: e.label, icon: e.icon || '' })),
+           ...genreVisual(x, 'portrait') };
 }
 
 export function genreProjection(genres, g) {
@@ -165,7 +175,7 @@ export function defaultProjection(phaseId, content) {
       const g = genreInitial();
       return { sub: genreSub(g), projection: genreProjection(content.genres || [], g) };
     }
-    case '07': return { sub: '07', projection: placeholderProjection('小小故事分類師', '我們的分類，和哪一種小說比較接近？') };
+    case '07': return { sub: '07', projection: placeholderProjection('小小故事分類師', TEXT.matchQuestion) };
     case '99': return { sub: '99', projection: endProjection() };
     default: return { sub: '', projection: {} };
   }

@@ -203,7 +203,7 @@ async function inViewport(page, sel) {
     // ---------- 02 ----------
     await teacher.click('button:has-text("進入下一環節 →")');
     await waitText(proj, '仔細觀察故事的共同特色');
-    ok(!/奇幻|偵探|歷史小說|冒險小說|武俠/.test(await text(proj)), '02：不提前顯示五種小說類型');
+    ok(!/奇幻|偵探|武俠|離奇事件與謎團|不同於現實的時空/.test(await text(proj)), '02：不提前顯示五種小說類型');
     await waitText(students[0].page, '進入探索模式');
     await students[0].page.click('text=進入探索模式');
     await waitText(students[0].page, '已進入探索模式');
@@ -222,7 +222,7 @@ async function inViewport(page, sel) {
     ok((await s0.locator('.bd-cat').count()) === 0 && (await text(s0)).includes('新增分類，將有共同特色的故事放在一起。'), '03：右側分類區初始為空白，只有一句提示');
     ok(!(await s0.locator('.bd-movebar').isVisible()) && !(await s0.locator('.bd-notice').isVisible()), '03：正常狀態下沒有多餘的提示列');
     const st0 = await text(s0);
-    ok(!/奇幻|偵探|歷史小說|冒險小說|武俠/.test(st0) && !/\d+ 號/.test(st0) && !st0.includes('組員'), '03：學生畫面不顯示小說類型、座號或組員');
+    ok(!/奇幻|偵探|武俠|離奇事件與謎團|不同於現實的時空/.test(st0) && !/\d+ 號/.test(st0) && !st0.includes('組員'), '03：學生畫面不顯示小說類型、座號或組員');
     await waitText(proj, '找出共同特色');
     const p03 = await text(proj);
     ok(p03.includes('我的故事分類') && p03.includes('閱讀故事') && p03.includes('建立自己的分類') && !/奇幻|偵探|武俠/.test(p03), '03：投影顯示任務引導，不顯示小說類型');
@@ -1462,21 +1462,47 @@ async function inViewport(page, sel) {
     await teacher.waitForSelector('.rs-grid');
 
     // ---------- 06：私下預覽不影響投影 ----------
+    // 投影端下載的類型圖片（網址、型態）：確認只載入需要的那一張、是 WebP、06 直式／07 橫式
+    const genreImgs = [];
+    proj.on('response', (r) => { if (r.url().includes('/assets/genres/')) genreImgs.push({ url: r.url().replace(/^.*\/assets\/genres\//, ''), type: r.headers()['content-type'] || '' }); });
+    const visualInfo = (page) => page.evaluate(() => {
+      const box = document.querySelector('.st-visual'); const img = box?.querySelector('img');
+      if (!box) return null;
+      const b = box.getBoundingClientRect();
+      return { cls: box.className, loaded: Boolean(img && img.complete && img.naturalWidth > 0), src: (img?.currentSrc || '').replace(/^.*\/assets\/genres\//, ''),
+               nw: img?.naturalWidth || 0, nh: img?.naturalHeight || 0, bw: Math.round(b.width), bh: Math.round(b.height),
+               fit: img ? getComputedStyle(img).objectFit : '', alt: img?.alt || box.getAttribute('aria-label') || '' };
+    });
     await teacher.click('text=進入第六環節 →');
     await waitText(proj, '分類背後的祕密');
-    await teacher.click('button.genre-btn:has-text("3. 歷史小說")');
+    await teacher.click('button.genre-btn:has-text("3. 歷史")');
     await waitText(teacher, '預覽（僅教師可見，尚未公開）');
     await proj.waitForTimeout(6000); // 超過輪詢週期
-    ok(!(await text(proj)).includes('歷史小說'), '06：教師私下預覽時，投影畫面不改變');
-    await teacher.click('text=揭開小說世界');
-    await waitText(proj, '歷史小說');
+    ok(!(await text(proj)).includes('歷史'), '06：教師私下預覽時，投影畫面不改變');
+    await teacher.click('text=揭開這個類型');
+    await waitText(proj, '歷史');
     const g = await text(proj);
-    ok(g.includes('歷史時代') && g.includes('真實背景') && g.includes('虛構故事'), '06：名稱與三個要素同時揭露');
+    ok(g.includes('歷史事件或人物') && g.includes('特定的歷史時期') && g.includes('當時的社會風貌'), '06：類型名稱與三項常見特色同時揭露');
     ok(!g.includes('教師補充'), '06：教師補充資料不投影');
+    // 圖片：直式主圖、完整呈現、WebP、只下載目前這一張
+    ok(await (async () => { for (let i = 0; i < 60; i++) { const v = await visualInfo(proj); if (v?.loaded) return true; await proj.waitForTimeout(200); } return false; })(), '06：類型主圖載入完成');
+    {
+      const v = await visualInfo(proj);
+      ok(/^historical-portrait(-600w)?\.webp$/.test(v.src) && v.cls.includes('portrait') && v.fit === 'contain' && Math.abs(v.bw / v.bh - 0.75) < 0.01 && v.alt.includes('歷史'),
+        `06：使用直式主圖（${v.src}，框 ${v.bw}×${v.bh}，原圖 ${v.nw}×${v.nh}，object-fit ${v.fit}）`);
+      ok(genreImgs.length >= 1 && genreImgs.every((x) => /^historical-portrait/.test(x.url) && x.type.includes('image/webp')),
+        `06：投影只下載目前類型的直式圖、型態為 WebP（${genreImgs.map((x) => x.url).join('、')}）`);
+      ok(g.includes('常見特色') && g.includes('小說類型 3／5') && !g.includes('核心要素') && !g.includes('小說世界'), '06：用語「常見特色」「小說類型」');
+      const raw = lastProj();
+      ok(!['提問：', '補充：', '赤壁', '剛才我們閱讀故事', '不是每個故事都必須'].some((w) => raw.includes(w)), '06：投影 API 不含教師補充');
+      const tp = await panel();
+      ok(tp.includes('共同引導') && tp.includes('赤壁圖片為情境插畫') && tp.includes('不會投影'), '06：教師端看得到共同引導與該類型的補充（標示不會投影）');
+    }
     await proj.screenshot({ path: path.join(OUT, 'p06-genre.png') });
-    await teacher.click('text=06-03 顯示五種類型總覽');
+    await teacher.screenshot({ path: path.join(OUT, 't06-panel.png') });
+    await teacher.click('text=06-03 顯示小說類型總覽');
     await waitText(proj, '小說類型總覽');
-    ok(!(await text(proj)).includes('奇幻小說'), '06：總覽中未公開的類型以「？」呈現');
+    ok(!(await text(proj)).includes('奇幻'), '06：總覽中未公開的類型以「？」呈現');
 
     // ---------- 返回上一環節 ----------
     await teacher.click('button:has-text("← 上一環節")');
@@ -1490,25 +1516,39 @@ async function inViewport(page, sel) {
     await waitText(proj, '小小故事分類師');
     await teacher.waitForSelector('.genre-pick');
     const p07 = await lastProj();
-    ok(!p07.includes('神祕案件') && !p07.includes('歷史時代'), '07：起始投影不含任何類型要素（不自動展開）');
-    ok(/3\. 歷史小說 ✓/.test(await panel()), '07：06 已公開的類型在 07 標示 ✓（跨環節保存）');
+    ok(!p07.includes('離奇事件與謎團') && !p07.includes('歷史事件或人物'), '07：起始投影不含任何類型要素（不自動展開）');
+    ok(/3\. 歷史 ✓/.test(await panel()), '07：06 已公開的類型在 07 標示 ✓（跨環節保存）');
     await teacher.selectOption('.rs-side select', { label: '第 1 組（小組正式提交）' });
     await teacher.locator('input[name=rs07cat]').first().check();
-    await teacher.click('button.genre-btn:has-text("2. 偵探小說")');
+    await teacher.click('button.genre-btn:has-text("2. 偵探")');
     await teacher.locator('.rs-el').first().locator('input').first().check();
     await teacher.locator('.rs-el').first().locator('input').nth(1).check();
     await teacher.locator('label:has-text("顯示句型鷹架") input').check();
     await teacher.waitForFunction(() => document.querySelector('.previews')?.innerText.includes('相似'), null, { timeout: 10000 });
     await proj.waitForTimeout(3500);
-    ok(!(await text(proj)).includes('偵探小說') && !lastProj().includes('神祕案件'), '07：私下預覽類型與要素時，投影與 API 回應都不變');
+    ok(!(await text(proj)).includes('偵探') && !lastProj().includes('離奇事件與謎團'), '07：私下預覽類型與要素時，投影與 API 回應都不變');
     await teacher.click('button:has-text("公開到投影")');
-    await waitText(proj, '偵探小說');
+    await waitText(proj, '偵探');
     const pm = await text(proj);
-    ok(pm.includes('會魔法的故事') && pm.includes('神祕案件') && pm.includes('相似') && pm.includes('我們把這些故事分在一起，是因為'),
+    ok(pm.includes('會魔法的故事') && pm.includes('離奇事件與謎團') && pm.includes('相似') && pm.includes('我們把這些故事分在一起，是因為'),
       '07：投影左側原始分類、右側類型與已揭露要素、相似標示、句型鷹架');
     await proj.waitForTimeout(2500);
-    ok(!lastProj().includes('尋找線索') && !lastProj().includes('推理解謎') && !lastProj().includes('教師補充'), '07：未揭露的要素與教師補充不在投影 API 回應中');
+    ok(!lastProj().includes('敏銳觀察與分析') && !lastProj().includes('透過推理解開謎題') && !lastProj().includes('教師補充'), '07：未揭露的要素與教師補充不在投影 API 回應中');
+    {
+      ok(await (async () => { for (let i = 0; i < 60; i++) { const v = await visualInfo(proj); if (v?.loaded) return true; await proj.waitForTimeout(200); } return false; })(), '07：類型橫式圖載入完成');
+      const v = await visualInfo(proj);
+      ok(/^detective-landscape(-960w)?\.webp$/.test(v.src) && v.cls.includes('landscape') && v.fit === 'contain',
+        `07：使用橫式圖（${v.src}，框 ${v.bw}×${v.bh}，object-fit ${v.fit}）`);
+      ok(!genreImgs.some((x) => /^detective-portrait/.test(x.url)) && genreImgs.some((x) => /^detective-landscape/.test(x.url))
+         && genreImgs.every((x) => x.type.includes('image/webp')), '07：投影沒有下載偵探的直式圖、只下載橫式圖（WebP）');
+      ok(!genreImgs.some((x) => /^(fantasy|adventure|wuxia)-/.test(x.url)), `07：沒有預載其他類型的圖片（目前共下載 ${genreImgs.length} 張）`);
+      const t7 = await text(proj);
+      ok(t7.includes('常見特色（尚未揭露）') && t7.includes('類型的故事很接近') && !t7.includes('核心要素'), '07：未揭露提示「常見特色（尚未揭露）」、新的句型鷹架');
+      ok(!['提問：', '主角注意到什麼'].some((w) => lastProj().includes(w)), '07：投影 API 不含該類型的教師補充');
+      ok((await panel()).includes('主角注意到什麼'), '07：教師端看得到所選類型的補充');
+    }
     await proj.screenshot({ path: path.join(OUT, 'p07-match.png') });
+    await teacher.screenshot({ path: path.join(OUT, 't07-panel.png') });
     // ---------- F3：預覽綁定目前的選擇（07） ----------
     if (!process.env.SKIP_F3) {
       const pubScaffold = async () => (await pg.query(`select projection ->> 'scaffold' t from public.session_state where session_id = $1`, [sid])).rows[0].t;
@@ -1565,57 +1605,57 @@ async function inViewport(page, sel) {
       await tc4.close();
     }
     // 更換類型：不殘留上一種類型的標示
-    await teacher.click('button.genre-btn:has-text("3. 歷史小說")');
+    await teacher.click('button.genre-btn:has-text("3. 歷史")');
     ok((await teacher.locator('.rs-el input:checked').count()) === 0, '07：更換類型時清除要素揭露與相似標示');
     await teacher.click('button:has-text("公開到投影")');
-    await waitText(proj, '歷史小說');
+    await waitText(proj, '歷史');
     await proj.waitForTimeout(2500);
-    ok(!(await text(proj)).includes('相似') && !lastProj().includes('神祕案件') && !lastProj().includes('歷史時代'), '07：新類型的要素未揭露、沒有殘留的相似標示');
+    ok(!(await text(proj)).includes('相似') && !lastProj().includes('離奇事件與謎團') && !lastProj().includes('歷史事件或人物'), '07：新類型的要素未揭露、沒有殘留的相似標示');
     // 重新整理、返回 06 再前進：還原
     await teacher.reload(); await proj.reload();
-    await waitText(proj, '歷史小說');
+    await waitText(proj, '歷史');
     await teacher.waitForSelector('.genre-pick');
     await waitText(teacher, '投影與預覽一致');
-    ok((await teacher.locator('.genre-btn.sel').textContent()).includes('歷史小說') && (await teacher.locator('input[name=rs07cat]:checked').count()) === 1,
+    ok((await teacher.locator('.genre-btn.sel').textContent()).includes('歷史') && (await teacher.locator('input[name=rs07cat]:checked').count()) === 1,
       '07：重新整理後教師端還原已公開的選擇，投影也還原');
     // ---------- F1：類型名稱與要素分開揭露（檢查投影 API 原始 JSON 與畫面） ----------
     const leaks = (str, words) => words.filter((w) => str.includes(w));
     await teacher.click('button:has-text("← 上一環節")');
     await waitText(proj, '小說類型總覽');
-    await proj.waitForFunction(() => document.body.innerText.includes('偵探小說'), null, { timeout: 12000 });
+    await proj.waitForFunction(() => document.body.innerText.includes('偵探'), null, { timeout: 12000 });
     await proj.waitForTimeout(2500);
     {
       const raw = lastProj(); const shown = await text(proj);
       ok(true, '07 → 06：返回 06 時，總覽包含在 07 公開過的類型名稱');
-      ok(raw.includes('神祕案件') && leaks(raw + shown, ['尋找線索', '推理解謎']).length === 0,
-        'F1：07 只公開一個要素 → 返回 06 總覽，投影 API 與畫面只有該要素 ' + leaks(raw + shown, ['尋找線索', '推理解謎']));
-      ok(['歷史時代', '真實背景', '虛構故事'].every((w) => raw.includes(w) && shown.includes(w)), 'F1：06 已完整揭露的類型經過 07 後返回仍完整');
+      ok(raw.includes('離奇事件與謎團') && leaks(raw + shown, ['敏銳觀察與分析', '透過推理解開謎題']).length === 0,
+        'F1：07 只公開一個要素 → 返回 06 總覽，投影 API 與畫面只有該要素 ' + leaks(raw + shown, ['敏銳觀察與分析', '透過推理解開謎題']));
+      ok(['歷史事件或人物', '特定的歷史時期', '當時的社會風貌'].every((w) => raw.includes(w) && shown.includes(w)), 'F1：06 已完整揭露的類型經過 07 後返回仍完整');
     }
     await teacher.click('button:has-text("下一環節 →")');
     await waitText(proj, '小小故事分類師');
     await waitText(proj, '會魔法的故事');
     ok((await text(proj)).includes('會魔法的故事'), '07：返回 06 再進入 07，投影恢復 07 最後公開的對照（依綁定的快照）');
     // 07 只公開類型名稱（零要素）→ 返回 06
-    await teacher.click('button.genre-btn:has-text("4. 冒險小說")');
+    await teacher.click('button.genre-btn:has-text("4. 冒險")');
     await teacher.click('button:has-text("公開到投影")');
-    await waitText(proj, '冒險小說');
+    await waitText(proj, '冒險');
     await teacher.click('button:has-text("← 上一環節")');
     await waitText(proj, '小說類型總覽');
-    await proj.waitForFunction(() => document.body.innerText.includes('冒險小說'), null, { timeout: 12000 });
+    await proj.waitForFunction(() => document.body.innerText.includes('冒險'), null, { timeout: 12000 });
     await proj.waitForTimeout(2500);
-    const HIDDEN = ['未知探索', '困難挑戰', '冒險旅程', '尋找線索', '推理解謎', '想像世界'];
+    const HIDDEN = ['不尋常的冒險經歷', '遭遇危險與困難', '運用智慧克服困難', '敏銳觀察與分析', '透過推理解開謎題', '不同於現實的時空'];
     {
       const raw = lastProj(); const shown = await text(proj);
       ok(leaks(raw + shown, HIDDEN).length === 0, 'F1：07 只公開名稱（零要素）→ 返回 06 總覽，三個要素都不在投影 API 與畫面中 ' + leaks(raw + shown, HIDDEN));
-      ok(shown.includes('冒險小說') && /"hidden":\s*true/.test(raw), 'F1：只公開名稱的類型在總覽顯示名稱，要素以未揭露位置呈現');
+      ok(shown.includes('冒險') && /"hidden":\s*true/.test(raw), 'F1：只公開名稱的類型在總覽顯示名稱，要素以未揭露位置呈現');
       await proj.screenshot({ path: path.join(OUT, 'p06-overview-partial.png') });
     }
     // 重新整理（教師與投影）
     await teacher.reload(); await proj.reload();
-    await waitText(proj, '冒險小說');
+    await waitText(proj, '冒險');
     await teacher.waitForSelector('.genre-pick');
     await proj.waitForTimeout(2500);
-    ok(leaks(lastProj() + await text(proj), HIDDEN).length === 0 && (await text(proj)).includes('神祕案件'), 'F1：重新整理後揭露範圍不變');
+    ok(leaks(lastProj() + await text(proj), HIDDEN).length === 0 && (await text(proj)).includes('離奇事件與謎團'), 'F1：重新整理後揭露範圍不變');
     // 第二台教師裝置（沒有這台裝置的 localStorage）：重新送出 06 總覽、往返 07
     {
       const tc3 = await ctx(browser, { viewport: { width: 1366, height: 1000 } });
@@ -1627,11 +1667,11 @@ async function inViewport(page, sel) {
         await t3.fill('input[type=email]', T_EMAIL); await t3.fill('input[type=password]', T_PASS); await t3.click('button[type=submit]');
       }
       await t3.waitForSelector('.genre-pick', { timeout: 15000 });
-      ok((await t3.locator('.genre-btn:has-text("3. 歷史小說")').textContent()).includes('✓')
-         && !(await t3.locator('.genre-btn:has-text("4. 冒險小說")').textContent()).includes('✓'),
+      ok((await t3.locator('.genre-btn:has-text("3. 歷史")').textContent()).includes('✓')
+         && !(await t3.locator('.genre-btn:has-text("4. 冒險")').textContent()).includes('✓'),
         'F1：第二台教師裝置只把完整揭露的類型標示為已揭開');
       const n0 = projBodies.length;
-      await t3.click('text=06-03 顯示五種類型總覽');
+      await t3.click('text=06-03 顯示小說類型總覽');
       await proj.waitForTimeout(3500);
       ok(projBodies.length > n0 && leaks(lastProj() + await text(proj), HIDDEN).length === 0, 'F1：第二台教師裝置重新送出總覽，不擴大公開範圍');
       await t3.click('button:has-text("下一環節 →")');
@@ -1639,7 +1679,7 @@ async function inViewport(page, sel) {
       await t3.click('button:has-text("← 上一環節")');
       await waitText(proj, '小說類型總覽');
       await proj.waitForTimeout(3000);
-      ok(leaks(lastProj() + await text(proj), HIDDEN).length === 0 && (await text(proj)).includes('冒險小說') && (await text(proj)).includes('歷史時代'),
+      ok(leaks(lastProj() + await text(proj), HIDDEN).length === 0 && (await text(proj)).includes('冒險') && (await text(proj)).includes('歷史事件或人物'),
         'F1：第二台教師裝置 07 → 06 往返後，揭露紀錄沒有遺失也沒有擴大');
       await tc3.close();
     }

@@ -174,3 +174,28 @@ PJ=$(psql_ -d $DB5 -c "set role anon" -c "select public.projector_state('$SID', 
 echo "$PJ" | grep -q 偵探小說 || fail "舊格式紀錄中的類型名稱遺失"
 for w in 神祕案件 尋找線索 推理解謎 奇幻小說; do echo "$PJ" | grep -q "$w" && fail "舊格式紀錄被擴大解讀（$w）"; done
 echo "ok - 已執行 97af137 升級檔的資料庫再升級：舊格式揭露紀錄只視為名稱已公開、檢查全過、舊函式移除"
+
+# 8. 小說類型教材：已部署的 Phase 5（main 6405692）＋停在 07 的場次 → 新 upgrade.sql → 教材腳本
+DB6=story_friends_bundle_genre
+mkdb $DB6 6405692
+psql_ -d $DB6 -c "insert into auth.users (id, email) values ('$T1', 't1@example.com'); insert into public.teachers values ('$T1', 't1@example.com');" >/dev/null
+SID=$(psql_ -d $DB6 -c "$TEACH" -c "select public.teacher_create_session('genre', 2)->>'session_id'" | tail -1)
+st6() { psql_ -d $DB6 -c "$TEACH" -c "select public.teacher_set_stage('$SID', '$1', '$2', '$3', (select rev from public.session_state where session_id = '$SID'), true)->>'ok'" | tail -1; }
+st6 07 07 '{"screen":"placeholder"}' >/dev/null
+psql_ -d $DB6 -c "$TEACH" -c "select public.teacher_publish_match('$SID', '{\"genre\":1,\"elements\":[0]}', (select rev from public.session_state where session_id = '$SID'))" >/dev/null
+STATE6=$(psql_ -d $DB6 -c "select md5(projection::text || disclosure::text || stage_ctl::text) from public.session_state where session_id = '$SID'")
+GEN6=$(psql_ -d $DB6 -c "select md5(string_agg(id || name || elements::text || coalesce(visual_url, ''), '|' order by slug)) from public.genres")
+psql_ -d $DB6 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 6405692 升級失敗"
+verify_ok $DB6 || { psql_ -d $DB6 -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
+[ "$(psql_ -d $DB6 -c "select md5(projection::text || disclosure::text || stage_ctl::text) from public.session_state where session_id = '$SID'")" = "$STATE6" ] || fail "升級改動了場次狀態"
+[ "$(psql_ -d $DB6 -c "select md5(string_agg(id || name || elements::text || coalesce(visual_url, ''), '|' order by slug)) from public.genres")" = "$GEN6" ] || fail "升級本身改動了教材（應由教材腳本另外執行）"
+echo "ok - 從已部署的 Phase 5（6405692）＋停在 07 的場次升級：新欄位與函式就緒、17 項全過；場次狀態與教材都不變"
+cp "$ROOT/supabase/content/genre_materials_v1.sql" "$TMP/content.sql"; chmod 644 "$TMP/content.sql"
+psql_ -d $DB6 -c "update public.session_state set updated_at = now() - interval '3 hours'" >/dev/null
+psql_ -d $DB6 -f "$TMP/content.sql" >/dev/null 2>&1 || fail "升級後套用教材失敗"
+[ "$(psql_ -d $DB6 -c "select md5(projection::text || disclosure::text || stage_ctl::text) from public.session_state where session_id = '$SID'")" = "$STATE6" ] || fail "教材腳本改動了場次狀態"
+st6 06 06-01 '{"screen":"genre","view":"recap","ctl":{"view":"recap","index":0}}' >/dev/null; st6 07 07 '{"screen":"placeholder"}' >/dev/null
+P=$(psql_ -d $DB6 -c "select projection::text from public.session_state where session_id = '$SID'")
+echo "$P" | grep -q '"name": "偵探"' && echo "$P" | grep -q 'detective-landscape.webp' && echo "$P" | grep -q '離奇事件與謎團' && ! echo "$P" | grep -q '敏銳觀察與分析' \
+  || fail "返回 07 時沒有以新教材重建（同樣只揭露第 0 項）：$P"
+echo "ok - 套用教材後返回 07：依原本的選擇（類型 1、只揭露第 0 項）以新名稱、新特色與橫式圖重建，揭露範圍不變"

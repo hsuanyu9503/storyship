@@ -4,7 +4,7 @@ import { createSync } from '../lib/sync.js';
 import { h, mount, toast, confirmDialog } from '../lib/dom.js';
 import { PHASES, phaseById, nextPhase, prevPhase, totalMinutes } from '../lib/phases.js';
 import * as P from '../lib/projection.js';
-import { renderProjection } from '../lib/render-projection.js';
+import { renderProjection, retryVisuals } from '../lib/render-projection.js';
 import { qrDataUrl, joinUrl } from '../lib/qr.js';
 import * as M from '../lib/board-model.js';
 import { createBoardView } from '../lib/board-view.js';
@@ -136,6 +136,7 @@ async function viewConsole(sessionId) {
   const els = {
     head: h('div'), steps: h('nav.steps'), panel: h('section.card.panel'),
     live: h('div.preview-box'), draft: h('div.preview-box'), draftWrap: h('div.draft-wrap'), roster: h('section.card'),
+    imgRetry: h('button.preview-img-retry', { type: 'button', hidden: true, onclick: () => { retryVisuals(S.els.previews); updateImgRetry(); } }, '重新載入預覽圖片'),
   };
   S.els = els;
   mount(root, h('div.page.console',
@@ -143,11 +144,13 @@ async function viewConsole(sessionId) {
     h('div.console-grid',
       h('aside', els.steps),
       h('main', els.panel, els.roster),
-      h('aside.previews',
+      els.previews = h('aside.previews',
         h('div.preview-label.live', '● 投影中（全班看到的畫面）'), els.live,
-        els.draftWrap))));
+        els.draftWrap, els.imgRetry))));
+  // 預覽中的類型圖片載入失敗時：縮小預覽裡的按鈕太小，改在預覽下方提供一般大小的按鈕（只重試教師端自己的圖片，不影響投影）
+  els.previews.addEventListener('st-visual', updateImgRetry);
 
-  S.results = createResults({ client, S, renderAll: () => renderAll(), refresh: () => S.sync.refresh(), ping: () => S.sync.ping('state') });
+  S.results = createResults({ client, S, renderAll: () => renderAll(), refresh: () => S.sync.refresh(), ping: () => S.sync.ping('state'), teacherGuide });
   S.sync = createSync({
     client,
     topic: 'lesson:' + sessionId,
@@ -160,16 +163,29 @@ async function viewConsole(sessionId) {
 }
 
 async function loadContent(setId) {
-  const [cards, intro, genres] = await Promise.all([
+  const [cards, intro, genres, set] = await Promise.all([
     client.from('story_cards').select('*').eq('content_set_id', setId).order('sort_order'),
     client.from('intro_stories').select('*, intro_clues(*)').eq('content_set_id', setId).order('sort_order'),
     client.from('genres').select('*').eq('content_set_id', setId).order('sort_order').order('slug'),   // 與伺服器 app.match_build 相同順序
+    // 教師共同補充（只有教師可讀；尚未執行教材腳本或舊資料庫時沒有此欄位，畫面只是不顯示）
+    client.from('content_sets').select('*').eq('id', setId).maybeSingle(),
   ]);
   S.content = {
     cards: cards.data || [],
     intro: (intro.data || []).map((s) => ({ ...s, clues: (s.intro_clues || []).sort((a, b) => a.sort_order - b.sort_order) })),
     genres: genres.data || [],
+    genreGuide: set.data?.genre_teacher_guide || null,
   };
+}
+
+// 教師專用補充（共同引導、共同提醒、圖片說明）：只在教師端顯示，不會投影或傳給學生
+export function teacherGuide(guide, open = false) {
+  if (!guide || typeof guide !== 'object') return null;
+  const rows = [['共同引導', guide.intro], ['共同提醒', guide.reminder], ['圖片', guide.image_note]].filter(([, t]) => t);
+  if (!rows.length) return null;
+  return h('details.teacher-guide', { open },
+    h('summary', '教師補充（只在教師端顯示，不會投影）'),
+    rows.map(([k, t]) => h('p', h('b', k + '：'), t)));
 }
 
 async function loadLive(sessionId) {
@@ -367,6 +383,10 @@ function renderSteps() {
       h('button.primary', { disabled: !nextPhase(cur), onclick: () => goPhase(nextPhase(cur)) }, '下一環節 →')));
 }
 
+function updateImgRetry() {
+  const b = S.els?.imgRetry; if (!b) return;
+  b.hidden = !S.els.previews.querySelector('.st-visual.failed');
+}
 function renderPreviews() {
   S.els.live.replaceChildren(renderProjection(S.pub, { showQr: false }));
   if (S.state.phase === '06' && S.genrePreview != null) {
@@ -381,6 +401,7 @@ function renderPreviews() {
   } else {
     S.els.draftWrap.replaceChildren();
   }
+  updateImgRetry();
 }
 
 // ----------------------------------------------------------------------
@@ -484,18 +505,19 @@ const PANELS = {
     return h('div',
       h('div.btn-grid',
         h('button', { onclick: () => genre('recap') }, '06-01 分類背後的祕密'),
-        h('button', { onclick: () => genre('overview') }, '06-03 顯示五種類型總覽'),
+        h('button', { onclick: () => genre('overview') }, '06-03 顯示小說類型總覽'),
         h('button.primary', { onclick: () => goPhase('07') }, '進入第七環節 →')),
+      teacherGuide(S.content.genreGuide, true),
       h('h3', '選擇小說類型（點選＝私下預覽，不會投影）'),
       h('div.genre-pick', gs.map((g, i) => h('button.genre-btn' + (pv === i ? '.sel' : '') + ((c.revealed || []).includes(i) ? '.pub' : ''),
         { onclick: () => { S.genrePreview = i; renderAll(); } },
         `${i + 1}. ${g.name}`, (c.revealed || []).includes(i) ? ' ✓' : ''))),
       pv != null ? h('div.genre-detail',
-        h('div', h('b', gs[pv].name), '：', gs[pv].elements.map((e) => e.label).join('、')),
-        gs[pv].teacher_notes ? h('p.muted', '教師補充：' + gs[pv].teacher_notes) : null,
+        h('div', h('b', gs[pv].name), '　常見特色：', gs[pv].elements.map((e) => e.label).join('、')),
+        gs[pv].teacher_notes ? h('div.teacher-note', h('b', '教師補充（不會投影）'), h('p', gs[pv].teacher_notes)) : null,
         h('div.row',
           h('button', { onclick: () => genre('goto', pv) }, '投影「即將揭開」畫面'),
-          h('button.primary', { onclick: () => { const n = P.genreOps.reveal(gs, P.genreOps.goto(gs, c, pv)); publish('06', P.genreSub(n), P.genreRevealProjection(gs, n)); } }, '揭開小說世界'))) : null);
+          h('button.primary', { onclick: () => { const n = P.genreOps.reveal(gs, P.genreOps.goto(gs, c, pv)); publish('06', P.genreSub(n), P.genreRevealProjection(gs, n)); } }, '揭開這個類型（名稱＋三項常見特色）'))) : null);
   },
 
   '07': () => h('div', S.results.panel07(),

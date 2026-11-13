@@ -158,9 +158,13 @@ const pm = await t1.rpc('teacher_publish_match', { p_session: SID, p_ctl: { snap
 ok(!pm.error && pm.data?.ok, '公開 07（只有類型名稱）' + (pm.error?.message || ''));
 await stage(t1, SID, '06', { screen: 'genre', view: 'overview', ctl: { view: 'overview', index: 0, revealed: [0, 1, 2, 3, 4] }, genres: [{ name: '偷看', elements: [{ label: '冒險旅程' }] }] }, true);
 const ov = JSON.stringify((await s.rpc('projector_state', { p_session: SID, p_key: pk })).data);
-ok(ov.includes('偵探小說') && !ov.includes('神祕案件') && !ov.includes('尋找線索') && ov.includes('歷史時代') && !ov.includes('冒險') && !ov.includes('偷看'),
+ok(ov.includes('偵探') && !ov.includes('離奇事件與謎團') && !ov.includes('敏銳觀察與分析') && ov.includes('歷史事件或人物') && !ov.includes('冒險') && !ov.includes('偷看'),
   '投影 API：06 總覽只含 06 揭開的類型與 07 公開的名稱；教師端夾帶的內容被忽略');
-ok(!ov.includes('教師補充') && !ov.includes('秘密理由ZQX'), '投影 API：不含教師補充與未揭露的理由');
+ok(!ov.includes('提問：') && !ov.includes('剛才我們閱讀故事') && !ov.includes('秘密理由ZQX'), '投影 API：不含教師補充（各類與共同補充）與未揭露的理由');
+const guide = await t1.from('content_sets').select('genre_teacher_guide').limit(1);
+ok(!guide.error && guide.data[0]?.genre_teacher_guide?.reminder?.includes('不是每個故事都必須全部符合'), '真實 PostgREST：教師讀得到共同補充');
+const guideAnon = await s.from('content_sets').select('genre_teacher_guide').limit(1);
+ok(Boolean(guideAnon.error) && guideAnon.error.code === '42501', '真實 PostgREST：匿名讀不到教師共同補充（42501）');
 
 // ---------- Realtime：收到變更通知；中斷時輪詢仍能取得正確狀態 ----------
 const rt = anon();
