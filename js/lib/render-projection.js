@@ -16,6 +16,47 @@ export function renderProjection(data, { showQr = true } = {}) {
   return stage;
 }
 
+// ---------- 小說類型圖片（06 直式、07 橫式）----------
+// 本專案的類型圖卡（assets/genres/<slug>-<portrait|landscape>.webp）另有較小版本：直式 600w、橫式 960w。
+// 其他網址只有單一來源。
+const VARIANT_W = { portrait: [600, 1086], landscape: [960, 1672] };
+export function genreSources(url) {
+  const m = /^(assets\/genres\/[a-z0-9-]+)-(portrait|landscape)\.webp$/.exec(url || '');
+  if (!m) return null;
+  const [small, full] = VARIANT_W[m[2]];
+  return [{ url: `${m[1]}-${m[2]}-${small}w.webp`, w: small }, { url, w: full }];
+}
+
+// 圖片框：比例由版位決定（slot＝portrait 3:4、landscape 16:9），圖片以完整呈現的方式置中（不裁切、不拉伸）。
+//   * 有多個尺寸時，先量到圖片框實際寬度再設定 srcset／sizes：教師的小預覽與投影各自選用適當尺寸，瀏覽器另依裝置像素比選擇。
+//     量到之前不設定來源，因此不會先下載一張用不到的大圖；只有目前畫面上的這一張會被下載（不預載其他類型）。
+//   * 載入中顯示「圖片載入中…」；載入失敗或沒有圖片時顯示描述文字（替代框）。
+function genreVisualBox(url, alt, slot) {
+  const box = h(`div.st-visual.${slot}`, { role: 'img', 'aria-label': alt });
+  const fallback = () => { box.classList.remove('loading'); box.classList.add('missing'); box.replaceChildren(h('span.st-visual-alt', alt)); };
+  if (!url) { fallback(); return box; }
+  box.classList.add('loading');
+  box.removeAttribute('role'); box.removeAttribute('aria-label');
+  const img = h('img', { alt, decoding: 'async', fetchpriority: 'high' });
+  img.addEventListener('load', () => box.classList.remove('loading'));
+  img.addEventListener('error', fallback);
+  const set = genreSources(url);
+  if (!set || typeof ResizeObserver === 'undefined') img.src = url;
+  else {
+    new ResizeObserver((entries) => {
+      const w = Math.round(entries[0].contentRect.width);
+      if (!w) return;
+      img.sizes = w + 'px';
+      if (!img.getAttribute('srcset')) { img.srcset = set.map((x) => `${x.url} ${x.w}w`).join(', '); img.src = set[0].url; }
+    }).observe(box);
+  }
+  box.append(img, h('span.st-visual-wait', '圖片載入中…'));
+  return box;
+}
+const genreAlt = (name) => `「${name}」類型情境插畫（觀察線索）`;
+// 常見特色前的標記：舊資料有圖示時沿用，否則用編號
+const featureMark = (e, k) => e.icon || String(k + 1);
+
 const SCREENS = {
   none: (p, d) => h('div.st-center', h('h1.st-title', d?.title || TEXT.activity)),
 
@@ -115,7 +156,7 @@ const SCREENS = {
         sd.unplaced_count ? h('div.st-side-unplaced', `尚未分類的故事：${sd.unplaced_count} 張`) : null))));
   },
 
-  // 07：原始分類 ↔ 小說類型要素對照
+  // 07：原始分類 ↔ 小說類型常見特色對照
   match: (p) => {
     const c = p.category; const g = p.genre;
     return h('div.st-match',
@@ -126,20 +167,20 @@ const SCREENS = {
             h('span.st-side-kind' + (p.group.kind === 'submitted' ? '' : '.locked'), p.group.kind === 'submitted' ? '小組正式提交' : '教師結束時保存（未正式提交）')) : null,
           c ? h('div.st-match-cat',
                 h('div.st-cat-name.big', c.label, c.unnamed ? h('span.st-unnamed', '（未命名）') : null),
-                // 顯示理由且故事較多時，故事改為名稱標籤（不放圖片），字級不變，讓理由完整可見
-                c.reason_state === 'shown' && c.cards.length > 3
+                // 故事較多時改為名稱標籤（不放圖片，三欄排列），字級不變：顯示理由時超過 3 張、未顯示時超過 6 張
+                c.cards.length > (c.reason_state === 'shown' ? 3 : 6)
                   ? h('div.st-cat-cards.st-match-chips', c.cards.map((x) => h('span.st-chip-card', x.title)))
                   : h('div.st-match-cards', c.cards.map((x) => h('div.st-match-card', media(x.image_url, x.title, 'st-match-img'), h('span', x.title)))),
                 c.reason_state === 'empty' ? h('div.st-cat-reason.empty', '（這一類沒有寫共同特色）') : null)
             : h('p.st-sub.muted', '老師正在選擇要對照的分類')),
         h('section.st-match-right',
           g ? h('div.st-match-genre',
-                media(g.visual_url, g.name, 'st-match-visual'),
+                genreVisualBox(g.visual_url, genreAlt(g.name), 'landscape'),
                 h('div.st-match-gname', g.name),
-                h('div.st-match-els', g.elements.map((e) => e.revealed
-                  ? h('div.st-match-el' + (e.highlight ? '.hl' : ''), h('span.icon', e.icon || '◆'), h('span', e.label), e.highlight ? h('span.st-hl-tag', '相似') : null)
-                  : h('div.st-match-el.hidden', h('span.icon', '？'), h('span', '核心要素')))))
-            : h('div.st-match-genre.empty', h('div.st-mystery', '？'), h('p.st-sub', '這些故事和哪一種小說比較接近？')))),
+                h('div.st-match-els', g.elements.map((e, k) => e.revealed
+                  ? h('div.st-match-el' + (e.highlight ? '.hl' : ''), h('span.icon', featureMark(e, k)), h('span', e.label), e.highlight ? h('span.st-hl-tag', '相似') : null)
+                  : h('div.st-match-el.hidden', h('span.icon', '？'), h('span', TEXT.featureHidden)))))
+            : h('div.st-match-genre.empty', h('div.st-mystery', '？'), h('p.st-sub', TEXT.matchQuestion)))),
       // 共同特色（最多 300 字）放在左右對照下方、橫跨整個畫面，字級不變
       c && c.reason_state === 'shown' ? h('div.st-cat-reason.st-match-reason', h('span.st-reason-label', '共同特色'), c.reason) : null,
       p.scaffold ? h('div.st-scaffold', TEXT.scaffold) : null);
@@ -156,22 +197,24 @@ const SCREENS = {
         h('div.st-ov-row', (p.genres || []).map((g) => g
           ? h('div.st-ov-card', h('div.st-ov-name', g.name),
               h('ul', (g.elements || []).map((e) => (e && !e.hidden
-                ? h('li', h('span.icon', e.icon), e.label)
-                : h('li.hidden', h('span.icon', '？'), '尚未揭露')))))
+                ? h('li', e.icon ? h('span.icon', e.icon) : null, e.label)
+                : h('li.hidden', h('span.icon', '？'), TEXT.featureHiddenShort)))))
           : h('div.st-ov-card.hidden', h('div.st-ov-name', '？')))));
     }
     if (p.view === 'teaser' || !p.genre) {
-      return h('div.st-center', h('span.st-chip', `小說世界 ${(p.index ?? 0) + 1} / ${p.total || 0}`),
-        h('div.st-mystery', '？'), h('p.st-sub', '即將揭開下一個小說世界'));
+      return h('div.st-center', h('span.st-chip', `小說類型 ${(p.index ?? 0) + 1}／${p.total || 0}`),
+        h('div.st-mystery', '？'), h('p.st-sub', '即將揭開下一種小說類型'));
     }
     const g = p.genre;
+    // 06：左側直式主圖（3:4，完整呈現）；右側類型名稱與三項常見特色（三列，由網站文字呈現）
     return h('div.st-genre',
-      media(g.visual_url, '小說類型主視覺', 'st-genre-visual'),
+      genreVisualBox(g.visual_url, genreAlt(g.name), 'portrait'),
       h('div.st-genre-body',
-        h('span.st-chip', `小說世界 ${(p.index ?? 0) + 1} / ${p.total || 0}`),
+        h('span.st-chip', `小說類型 ${(p.index ?? 0) + 1}／${p.total || 0}`),
         h('h1.st-title.big', g.name),
-        h('div.st-elements', g.elements.map((e) =>
-          h('div.st-element', h('div.icon', e.icon || '◆'), h('div', e.label))))));
+        h('p.st-feature-head', '常見特色'),
+        h('ol.st-features', g.elements.map((e, k) =>
+          h('li.st-feature', h('span.st-feature-n', featureMark(e, k)), h('span.st-feature-t', e.label))))));
   },
 
   end: (p) => h('div.st-center.st-end', media(null, '結束畫面背景', 'st-bg'),

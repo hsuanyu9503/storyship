@@ -161,18 +161,31 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
 .st-cross-card .placeholder, .st-cross-card img { height: 16cqw; width: 100%; }
 .st-cross-title { font-size: 2.6cqw; font-weight: 700; text-align: center; }
 .st-mystery { font-size: 14cqw; font-weight: 800; color: var(--accent); line-height: 1; }
-.st-genre { display: grid; grid-template-columns: 38% 1fr; gap: 3cqw; padding: 4cqw; align-items: center; }
-.st-genre-visual { width: 100%; height: 100%; min-height: 30cqw; }
-.st-genre-body { display: flex; flex-direction: column; gap: 2cqw; align-items: flex-start; }
-.st-elements { display: flex; gap: 2cqw; }
-.st-element { background: #fff; border: 2px solid var(--accent); border-radius: 1.4cqw; padding: 1.6cqw 2cqw; font-size: 2.8cqw; font-weight: 700; text-align: center; }
-.st-element .icon { font-size: 4cqw; }
-.st-overview { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3cqw; gap: 2cqw; }
-.st-ov-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.5cqw; width: 100%; }
-.st-ov-card { background: #fff; border: 2px solid var(--accent); border-radius: 1.2cqw; padding: 1.5cqw; }
+/* 小說類型圖片框：比例由版位決定，圖片完整呈現（object-fit: contain），不裁切、不拉伸；載入前先佔好空間，避免版面跳動 */
+.st-visual { position: relative; display: grid; place-items: center; overflow: hidden; border-radius: 1.2cqw; background: #eceee8; }
+.st-visual.portrait { aspect-ratio: 3 / 4; }
+.st-visual.landscape { aspect-ratio: 16 / 9; }
+.st-visual img { width: 100%; height: 100%; object-fit: contain; display: block; transition: opacity .2s; }
+.st-visual.loading img { opacity: 0; }
+.st-visual-wait { position: absolute; display: none; font-size: 1.6cqw; color: var(--muted); }
+.st-visual.loading .st-visual-wait { display: block; }
+.st-visual.missing { border: .2cqw dashed var(--line); background: #f6f7f4; }
+.st-visual-alt { padding: 1.5cqw; text-align: center; color: var(--muted); font-size: 1.7cqw; line-height: 1.4; }
+/* 06：直式主圖（高度＝畫面可用高度，寬度依 3:4）＋類型名稱與三項常見特色（三列） */
+.st-genre { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3.5cqw; padding: 4cqw 5cqw; align-items: center; }
+.st-genre > .st-visual.portrait { height: 47cqw; width: auto; }
+.st-genre-body { display: flex; flex-direction: column; gap: 1.6cqw; align-items: flex-start; min-width: 0; }
+.st-feature-head { margin: .6cqw 0 0; font-size: 2.2cqw; font-weight: 700; color: var(--accent); }
+.st-features { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1.3cqw; width: 100%; }
+.st-feature { display: flex; align-items: center; gap: 1.6cqw; background: #fff; border: .2cqw solid var(--accent); border-radius: 1.2cqw;
+              padding: 1.3cqw 2cqw; font-size: 3.2cqw; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+.st-feature-n { flex: none; display: grid; place-items: center; width: 4.6cqw; height: 4.6cqw; border-radius: 50%; background: var(--accent); color: #fff; font-size: 2.4cqw; }
+.st-overview { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3cqw 2cqw; gap: 2cqw; }
+.st-ov-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1cqw; width: 100%; }
+.st-ov-card { background: #fff; border: 2px solid var(--accent); border-radius: 1.2cqw; padding: 1.3cqw 1cqw; }
 .st-ov-card.hidden { border-style: dashed; border-color: var(--line); display: grid; place-items: center; }
 .st-ov-name { font-size: 2.6cqw; font-weight: 800; margin-bottom: 1cqw; text-align: center; }
-.st-ov-card ul { list-style: none; padding: 0; margin: 0; font-size: 2cqw; display: grid; gap: .6cqw; }
+.st-ov-card ul { list-style: none; padding: 0; margin: 0; font-size: 1.8cqw; line-height: 1.35; display: grid; gap: .8cqw; text-align: center; }
 .st-ov-card .icon { margin-right: .5cqw; }
 .st-ov-card li.hidden { opacity: .55; font-style: italic; }
 .net-badge { position: fixed; top: 1rem; right: 1rem; background: var(--bad); color: #fff; padding: .4rem .8rem; border-radius: 8px; }
@@ -396,7 +409,9 @@ body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 .st-cmp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2cqw; }
 .st-compare.single .st-cmp-body { grid-template-columns: 1fr; max-width: 62cqw; width: 100%; margin: 0 auto; }
 .st-compare.zoom .st-cmp-body { max-width: none; }
-.st-match-chips .st-chip-card { font-size: 1.5cqw; font-weight: 700; }
+.st-cat-cards.st-match-chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6cqw; }
+.st-match-chips .st-chip-card { font-size: 1.5cqw; font-weight: 700; text-align: center; }
+.st-match-cat .st-cat-name.big { font-size: 2.5cqw; }
 .st-match-reason { background: rgba(255,255,255,.85); border: .2cqw solid var(--line); border-radius: 1cqw; padding: .8cqw 1.4cqw; }
 .st-side { display: flex; flex-direction: column; gap: .9cqw; min-height: 0; background: rgba(255,255,255,.65); border: .2cqw solid var(--line); border-radius: 1.2cqw; padding: 1.2cqw; }
 .st-side-head { display: flex; align-items: center; gap: 1cqw; flex-wrap: wrap; }
@@ -425,12 +440,13 @@ body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 .st-match-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8cqw; }
 .st-match-card { display: flex; flex-direction: column; gap: .3cqw; font-size: 1.5cqw; font-weight: 700; text-align: center; }
 .st-match-img { height: 6cqw; width: 100%; }
-.st-match-genre { display: flex; flex-direction: column; align-items: center; gap: 1cqw; text-align: center; }
-.st-match-genre.empty { justify-content: center; flex: 1; }
-.st-match-visual { height: 10cqw; width: 70%; }
+.st-match-genre { display: flex; flex-direction: column; align-items: center; gap: .8cqw; text-align: center; flex: 1; min-height: 0; width: 100%; }
+.st-match-genre.empty { justify-content: center; }
+/* 07：橫式圖（16:9）；可用高度不足時整個圖片框等比縮小，名稱與三項特色優先完整顯示 */
+.st-match-genre > .st-visual.landscape { flex: 1 1 0; min-height: 6cqw; max-width: 100%; width: auto; max-height: 26cqw; }
 .st-match-gname { font-size: 3.4cqw; font-weight: 800; }
-.st-match-els { display: flex; flex-direction: column; gap: .8cqw; width: 100%; }
-.st-match-el { display: flex; align-items: center; gap: 1cqw; font-size: 2.1cqw; font-weight: 700; background: #fff; border: .2cqw solid var(--accent); border-radius: 1cqw; padding: .6cqw 1.2cqw; }
+.st-match-els { display: flex; flex-direction: column; gap: .6cqw; width: 100%; }
+.st-match-el { display: flex; align-items: center; gap: 1cqw; font-size: 2.1cqw; font-weight: 700; background: #fff; border: .2cqw solid var(--accent); border-radius: 1cqw; padding: .45cqw 1.2cqw; }
 .st-match-el.hidden { border-style: dashed; border-color: var(--line); color: var(--muted); }
 .st-match-el.hl { background: #fff3c4; border-color: #d6a400; }
 .st-hl-tag { margin-left: auto; font-size: 1.3cqw; background: #d6a400; color: #fff; border-radius: 99px; padding: .15cqw .8cqw; }
@@ -453,3 +469,9 @@ body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 .rs-els { display: grid; gap: .3rem; }
 .rs-els .rs-el { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
 .preview-label.draft.dirty { color: var(--warn); font-weight: 700; }
+/* 教師專用補充（只在教師端） */
+.teacher-guide { background: #fffbea; border: 1px solid #ecd98a; border-radius: 8px; padding: .5rem .8rem; margin: .6rem 0; }
+.teacher-guide summary { cursor: pointer; font-weight: 700; }
+.teacher-guide p { margin: .4rem 0; line-height: 1.6; }
+.teacher-note { background: #fffbea; border-left: 4px solid #d6a400; padding: .4rem .7rem; margin: .5rem 0; border-radius: 4px; }
+.teacher-note p { margin: .2rem 0 0; white-space: pre-line; line-height: 1.6; }

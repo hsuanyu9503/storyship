@@ -43,6 +43,12 @@ alter table public.group_category_tombstones add column if not exists result jso
 alter table public.session_state add column if not exists stage_ctl jsonb not null default '{}'::jsonb;
 alter table public.session_state add column if not exists disclosure jsonb not null default '{}'::jsonb;
 
+-- 小說類型教材（2026-11）：橫式圖片與教師共同補充（可重複執行；舊資料這兩欄為 null，畫面回退既有圖片）
+--   genres.visual_landscape_url：07 對照用的橫式圖（06 仍用 visual_url 直式主圖）
+--   content_sets.genre_teacher_guide：06／07 教師專用的共同引導與提醒 {"intro","reminder","image_note"}（只有教師可讀）
+alter table public.genres add column if not exists visual_landscape_url text;
+alter table public.content_sets add column if not exists genre_teacher_guide jsonb;
+
 -- =====================================================================
 -- 鎖定協定（Phase 3 複檢後整理；所有寫入路徑都遵守）
 --   1. sessions 列：教師以 FOR NO KEY UPDATE 鎖定（同一場次的教師操作依序執行）。
@@ -1149,7 +1155,7 @@ begin
         e_out := e_out || jsonb_build_array(jsonb_build_object('slot', i, 'revealed', false));
       end if;
     end loop;
-    out_genre := jsonb_build_object('name', gr.name, 'visual_url', gr.visual_url, 'elements', e_out);
+    out_genre := jsonb_build_object('name', gr.name, 'elements', e_out) || app.genre_visual(gr.visual_url, gr.visual_landscape_url, 'landscape');
   elsif jsonb_typeof(p_ctl -> 'genre') not in ('null') and p_ctl ? 'genre' then
     raise exception 'BAD_DATA';
   else
@@ -1180,6 +1186,19 @@ create or replace function app.disc_map(p_disc jsonb) returns jsonb language sql
                              where jsonb_typeof(x) = 'number') t
                      where not (case when jsonb_typeof(p_disc -> 'revealed') = 'object' then p_disc -> 'revealed' else '{}'::jsonb end) ? k),
                    '{}'::jsonb);
+$$;
+
+-- 類型圖片的來源選擇（06 預覽／公開、07 預覽／公開共用同一個規則；js/lib/projection.js genreVisual 與此相同）
+--   p_prefer = 'portrait'（06）：直式 visual_url → 沒有時用橫式
+--   p_prefer = 'landscape'（07）：橫式 visual_landscape_url → 沒有時回退直式（畫面以完整呈現的方式顯示，不裁切、不拉伸）
+--   visual_source：實際採用的欄位（portrait｜landscape），前端只用它決定有哪些縮圖可用
+create or replace function app.genre_visual(p_portrait text, p_landscape text, p_prefer text) returns jsonb
+language sql immutable set search_path = public, pg_temp as $$
+  select case
+    when p_prefer = 'landscape' and nullif(btrim(p_landscape), '') is not null then jsonb_build_object('visual_url', btrim(p_landscape), 'visual_source', 'landscape')
+    when nullif(btrim(p_portrait), '') is not null then jsonb_build_object('visual_url', btrim(p_portrait), 'visual_source', 'portrait')
+    when nullif(btrim(p_landscape), '') is not null then jsonb_build_object('visual_url', btrim(p_landscape), 'visual_source', 'landscape')
+    else jsonb_build_object('visual_url', null, 'visual_source', null) end;
 $$;
 
 -- 本場素材的類型（與教師端相同排序）
@@ -1261,9 +1280,9 @@ begin
     gr := app.genre_at(p_session, v_idx);
     n_el := least(3, jsonb_array_length(gr.elements));
     proj := jsonb_build_object('screen', 'genre', 'view', v_view, 'ctl', ctl, 'index', v_idx, 'total', n,
-      'genre', case when v_view = 'genre' then jsonb_build_object('name', gr.name, 'visual_url', gr.visual_url, 'elements',
+      'genre', case when v_view = 'genre' then jsonb_build_object('name', gr.name, 'elements',
                  (select coalesce(jsonb_agg(jsonb_build_object('label', gr.elements -> k ->> 'label', 'icon', coalesce(gr.elements -> k ->> 'icon', '')) order by k), '[]'::jsonb)
-                    from generate_series(0, n_el - 1) k)) end);
+                    from generate_series(0, n_el - 1) k)) || app.genre_visual(gr.visual_url, gr.visual_landscape_url, 'portrait') end);
   end if;
   return jsonb_build_object('projection', proj, 'disclosure', coalesce(p_disc, '{}'::jsonb));
 end $$;
@@ -1535,10 +1554,14 @@ union all
 select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
         where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev')
 union all
-select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果）',
+select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充）',
        (select count(*) from information_schema.columns where table_schema = 'public'
           and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
-            or (table_name = 'group_category_tombstones' and column_name = 'result'))) = 3
+            or (table_name = 'group_category_tombstones' and column_name = 'result')
+            or (table_name = 'genres' and column_name = 'visual_landscape_url')
+            or (table_name = 'content_sets' and column_name = 'genre_teacher_guide'))) = 5
+       and to_regprocedure('app.genre_visual(text,text,text)') is not null
+       and not has_function_privilege('anon', 'app.genre_visual(text,text,text)', 'execute')
 union all
 select '17. Phase 4 函式存在且只開放給教師（含 06 伺服器產生投影）',
        to_regprocedure('public.teacher_publish_compare(uuid,jsonb,bigint)') is not null

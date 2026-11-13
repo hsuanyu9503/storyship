@@ -10,6 +10,8 @@
 | `npm run test:upgrade` | Phase 1 → 2、Phase 2 → 3、Phase 3 → 4 升級（含上課中資料）、Phase 3 停在 06 時升級、已執行 97af137 升級檔後再升級、升級空窗、單一交易升級檔（原子性）、升級後檢查、回復、再升級，資料不變 | PostgreSQL＋git |
 | `npm run test:concurrency` | 12 個連線、六組同時移動卡片與改名稱 1,800 次，驗證沒有遺失更新；六組同時提交 | PostgreSQL＋`pgbench` |
 | `tests/e2e`（見下） | 瀏覽器端對端：教師、投影、五位獨立學生（第 1 組四位含補加入者）完整走過 00→99，含 03 個人分類與 04 小組共作全流程，以攔截回應製造的交錯測試，以及 05→06→07 的公開流程、兩台教師裝置競爭、離開 03 的共同確認、預覽版本綁定（延遲、反序、失敗、重試、公開在途時修改）、類型揭露範圍（見 PHASE4.md 第十一節） | 上述＋Playwright |
+| `bash tests/db/genre_materials.sh`（`npm run test:db` 會執行） | 小說類型教材腳本：進行中場次與順序不符時中止、依 slug 更新、id／排序／場次狀態不變、可重複執行、備份；06 直式／07 橫式、缺圖回退；教師補充權限；回復與再套用 | PostgreSQL |
+| `node tests/e2e/genre_shots.js` | 第 06／07 實際畫面截圖（投影 1600×900、1920×1080，五種類型；教師 iPad 橫向／直向）與每個畫面實際選用、下載的圖片紀錄（`.cache/genre-shots/image-selection.json`） | shim＋Playwright |
 | `tests/e2e/touch.js` | 觸控與投影驗收（Phase 5）：模擬 iPad／iPad Mini／Pixel 7 的 tap、觸控滑動、螢幕鍵盤（視窗變矮）、連點、斷線；教師平板 05／07 每個控制項的可見性、遮擋與觸控目標大小；以真實流程建立上限內容並量測 16:9 投影 | shim 或真實堆疊＋Playwright |
 | `bash tests/supabase/run.sh` | 隔離的本機 Supabase（Docker：Supabase 官方 Postgres、GoTrue、PostgREST、Realtime）：全新安裝、重複執行、真實 PostgREST 的 API 與權限（anon、場次擁有者、另一位教師、未列入白名單者、跨場次）、Realtime 通知；從 Phase 3＋上課中資料（停在 06）升級、重複升級、回復、再升級 | Docker（可存取 Docker Hub）＋Node＋psql |
 | `bash tests/supabase/e2e_real.sh` | 在上述真實堆疊上執行 `realtime_browser.js`（Realtime 中斷與恢復）、`touch.js`、完整 `e2e.js` | 同上＋Playwright |

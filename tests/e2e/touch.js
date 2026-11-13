@@ -280,7 +280,7 @@ const noHScroll = (p) => p.evaluate(() => document.documentElement.scrollWidth <
     await touchTarget(T7, T7.locator('label:has(input[name=rs07cat])').first(), '07 橫向「選分類」');
     await T7.locator('label:has(input[name=rs07cat])').first().tap();
     await T7.locator('label:has-text("一併顯示這一類的共同特色")').tap();
-    const gbtn = T7.locator('button.genre-btn:has-text("2. 偵探小說")');
+    const gbtn = T7.locator('button.genre-btn:has-text("2. 偵探")');
     await touchTarget(T7, gbtn, '07 橫向「選類型」');
     await gbtn.tap();
     const el0 = T7.locator('.rs-el').first().locator('label').first();
@@ -293,7 +293,7 @@ const noHScroll = (p) => p.evaluate(() => document.documentElement.scrollWidth <
     await until(async () => (await pg.query(`select projection ->> 'screen' s from public.session_state where session_id = $1`, [SID])).rows[0].s === 'match', 12000);
     await sleep(3500);
     const p7 = await proj.evaluate(() => document.body.innerText);
-    ok(p7.includes('共同特色') && p7.includes('神祕案件'), '07：投影顯示分類（3 張故事）、300 字共同特色、已揭露的要素');
+    ok(p7.includes('共同特色') && p7.includes('離奇事件與謎團'), '07：投影顯示分類（3 張故事）、300 字共同特色、已揭露的要素');
     ok((await projFits()) === true, '07：16:9 投影上限內容（30 字名稱、300 字理由、句型鷹架）完整可見');
     await proj.screenshot({ path: path.join(OUT, 'touch-p07.png') });
     await T7.screenshot({ path: path.join(OUT, 'touch-t07-landscape.png') });

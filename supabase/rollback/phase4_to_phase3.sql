@@ -18,6 +18,7 @@ drop function if exists app.compare_build(uuid, jsonb);
 drop function if exists app.match_build(uuid, jsonb);
 drop function if exists app.disclose_genres(uuid, jsonb, jsonb);
 drop function if exists app.genre_build(uuid, jsonb, jsonb);
+drop function if exists app.genre_visual(text, text, text);
 drop function if exists app.disc_from_legacy(uuid, jsonb, jsonb);
 drop function if exists app.disc_add(uuid, jsonb, int, jsonb);
 drop function if exists app.genre_at(uuid, int);

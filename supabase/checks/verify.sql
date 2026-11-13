@@ -67,10 +67,14 @@ union all
 select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
         where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev')
 union all
-select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果）',
+select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充）',
        (select count(*) from information_schema.columns where table_schema = 'public'
           and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
-            or (table_name = 'group_category_tombstones' and column_name = 'result'))) = 3
+            or (table_name = 'group_category_tombstones' and column_name = 'result')
+            or (table_name = 'genres' and column_name = 'visual_landscape_url')
+            or (table_name = 'content_sets' and column_name = 'genre_teacher_guide'))) = 5
+       and to_regprocedure('app.genre_visual(text,text,text)') is not null
+       and not has_function_privilege('anon', 'app.genre_visual(text,text,text)', 'execute')
 union all
 select '17. Phase 4 函式存在且只開放給教師（含 06 伺服器產生投影）',
        to_regprocedure('public.teacher_publish_compare(uuid,jsonb,bigint)') is not null

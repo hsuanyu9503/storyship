@@ -1,0 +1,21 @@
+原始檔名,輸出檔名,網站路徑,寬,高,處理,位元組,sha256 前 16 碼
+奇幻類型3：4.png,fantasy-portrait.webp,assets/genres/fantasy-portrait.webp,1086,1448,來源 WebP（品質 82，未重新壓縮）,358462,a78b74191c53f1e1
+奇幻類型3：4.png,fantasy-portrait-600w.webp,assets/genres/fantasy-portrait-600w.webp,600,800,由 fantasy-portrait.webp 縮小，WebP 有損 quality=82 method=6,137714,0b51075630c1240a
+奇幻類型16：9.png,fantasy-landscape.webp,assets/genres/fantasy-landscape.webp,1672,941,來源 WebP（品質 82，未重新壓縮）,442478,f98d8a18ce6c3a2c
+奇幻類型16：9.png,fantasy-landscape-960w.webp,assets/genres/fantasy-landscape-960w.webp,960,540,由 fantasy-landscape.webp 縮小，WebP 有損 quality=82 method=6,179946,33f5b00fdaca8d8b
+推理類型3：4.png,detective-portrait.webp,assets/genres/detective-portrait.webp,1086,1448,來源 WebP（品質 82，未重新壓縮）,277712,00871aa52f43cb03
+推理類型3：4.png,detective-portrait-600w.webp,assets/genres/detective-portrait-600w.webp,600,800,由 detective-portrait.webp 縮小，WebP 有損 quality=82 method=6,107738,4be3f44e11f35e6f
+推理類型16：9.png,detective-landscape.webp,assets/genres/detective-landscape.webp,1672,941,來源 WebP（品質 82，未重新壓縮）,348706,96669ad4c9560bff
+推理類型16：9.png,detective-landscape-960w.webp,assets/genres/detective-landscape-960w.webp,960,540,由 detective-landscape.webp 縮小，WebP 有損 quality=82 method=6,139210,a133a395aaa0bd06
+歷史類型3：4.png,historical-portrait.webp,assets/genres/historical-portrait.webp,1086,1448,來源 WebP（品質 82，未重新壓縮）,461584,66ac15cb2b22eaa7
+歷史類型3：4.png,historical-portrait-600w.webp,assets/genres/historical-portrait-600w.webp,600,800,由 historical-portrait.webp 縮小，WebP 有損 quality=82 method=6,164098,87736161911df1cb
+歷史類型16：9.png,historical-landscape.webp,assets/genres/historical-landscape.webp,1672,941,來源 WebP（品質 82，未重新壓縮）,494106,49c9e17c9f3a989f
+歷史類型16：9.png,historical-landscape-960w.webp,assets/genres/historical-landscape-960w.webp,960,540,由 historical-landscape.webp 縮小，WebP 有損 quality=82 method=6,187796,8b9979fa279c9bbe
+冒險類型3：4.png,adventure-portrait.webp,assets/genres/adventure-portrait.webp,1086,1448,來源 WebP（品質 82，未重新壓縮）,457674,7233ba574c8f0a88
+冒險類型3：4.png,adventure-portrait-600w.webp,assets/genres/adventure-portrait-600w.webp,600,800,由 adventure-portrait.webp 縮小，WebP 有損 quality=82 method=6,170652,c93dd9647810caa0
+冒險類型16：9.png,adventure-landscape.webp,assets/genres/adventure-landscape.webp,1672,941,來源 WebP（品質 82，未重新壓縮）,518514,c6deefa80b402daf
+冒險類型16：9.png,adventure-landscape-960w.webp,assets/genres/adventure-landscape-960w.webp,960,540,由 adventure-landscape.webp 縮小，WebP 有損 quality=82 method=6,199318,23ff56123111e7e8
+武俠類型3：4.png,wuxia-portrait.webp,assets/genres/wuxia-portrait.webp,1086,1448,來源 WebP（品質 82，未重新壓縮）,395108,35065ffff59aa446
+武俠類型3：4.png,wuxia-portrait-600w.webp,assets/genres/wuxia-portrait-600w.webp,600,800,由 wuxia-portrait.webp 縮小，WebP 有損 quality=82 method=6,146096,315183d30da677f8
+武俠類型16：9.png,wuxia-landscape.webp,assets/genres/wuxia-landscape.webp,1672,941,來源 WebP（品質 82，未重新壓縮）,450376,f96adc97803dc62c
+武俠類型16：9.png,wuxia-landscape-960w.webp,assets/genres/wuxia-landscape-960w.webp,960,540,由 wuxia-landscape.webp 縮小，WebP 有損 quality=82 method=6,178064,d1ed0c7593e378c0
