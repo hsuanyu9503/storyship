@@ -24,7 +24,9 @@
 | `tests/e2e/touch.js`（新增） | 觸控與投影驗收（模擬 iPad、iPad Mini、Pixel 7） |
 | `tests/db/race_d2.sh`（新增）、`package.json` | D2：兩個資料庫連線的真實並行讀取；加入 `test:race` |
 | `tests/supabase/`（新增） | 隔離的本機 Supabase（Docker）：`up.sh`、`docker-compose.yml`、`gateway.js`、`run.sh`（安裝／升級／回復＋API）、`api_test.mjs`、`seed_phase3_live.mjs`、`upgrade_check.mjs`、`realtime_browser.js`、`e2e_real.sh` |
-| `.gitignore` | `tests/supabase/.state/`（本機測試的隨機密鑰） |
+| `.gitignore` | `tests/supabase/.state/`（舊位置；密鑰已改放 repo 之外） |
+| `tests/lib/static-site.js`（新增）、`tests/e2e/shim.js`、`tests/supabase/gateway.js`、`tests/supabase/state_dir.sh`（新增）、`tests/unit/static_servers.test.mjs`（新增） | 複檢 F1：測試伺服器只供應網站檔案、只監聽 loopback；密鑰移到 repo 之外 |
+| `js/lib/board-order.js`（新增）、`js/student/group.js` | 複檢 D2 補強：`adopt()` 的新舊判斷改為共用函式，`race_d2.sh` 直接呼叫 |
 | `docs/PHASE5.md`（新增）、`docs/REVIEW_HANDOFF_PHASE5.md`（本文件）、`docs/TEACHER_CHECKLIST.md`（新增）、`docs/DEPLOY.md`（G 節）、`docs/TESTING.md` | 文件 |
 
 ## 3. 入口

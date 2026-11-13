@@ -7,10 +7,10 @@
 # 用法：bash tests/supabase/run.sh  （需要 Docker；結束後停止容器）
 set -euo pipefail
 cd "$(dirname "$0")"
-HERE=$(pwd); ROOT=$(realpath ../..)
+HERE=$(pwd); ROOT=$(realpath ../..); STATE=$(bash "$HERE/state_dir.sh")
 fail() { echo "FAIL: $*"; bash "$HERE/up.sh" down >/dev/null; exit 1; }
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-fresh() { bash "$HERE/up.sh" down >/dev/null; bash "$HERE/up.sh" >/dev/null || fail "Supabase 啟動失敗"; set -a; . "$HERE/.state/env"; set +a; export GATEWAY_URL="http://localhost:$GATEWAY_PORT"; }
+fresh() { bash "$HERE/up.sh" down >/dev/null; bash "$HERE/up.sh" >/dev/null || fail "Supabase 啟動失敗"; set -a; . "$STATE/env"; set +a; export GATEWAY_URL="http://localhost:$GATEWAY_PORT"; }
 psql_() { PGPASSWORD=$POSTGRES_PASSWORD psql -X -q -t -A -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$DB_PORT" -U postgres -d postgres "$@"; }
 verify17() { local out; out=$(psql_ -f "$ROOT/supabase/checks/verify.sql"); [ "$(echo "$out" | grep -c '|t$')" = "17" ] && ! echo "$out" | grep -q '|f$' || { echo "$out"; return 1; }; }
 digest() { psql_ -c "select md5(string_agg(t, '|' order by t)) from (

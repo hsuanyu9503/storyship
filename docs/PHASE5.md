@@ -92,7 +92,7 @@
 
 `tests/supabase/`：以 Docker 啟動 Supabase 官方 self-hosting 的元件——`supabase/postgres:15.8.1.060`（Supabase 的角色與**預設權限**）、
 GoTrue `v2.177.0`、PostgREST `v12.2.3`、Realtime `v2.34.47`，加上取代 Kong 的小閘道（要求 `apikey`，路由 `/rest/v1`、`/auth/v1`、`/realtime/v1`）。
-密鑰每次隨機產生在 `tests/supabase/.state/`（已列入 `.gitignore`），不寫入 repo、不輸出到畫面。所有 SQL 以 `postgres` 角色（與 SQL Editor 相同，非超級使用者）執行。
+密鑰每次隨機產生在 **repository 之外**的狀態目錄（預設 `~/.cache/storyship-sbtest`，可用 `SB_STATE_DIR` 指定；指向 repo 內會被拒絕），不寫入 repo、不輸出到畫面。測試閘道與 shim 只監聽 `127.0.0.1`，且只供應網站本身的檔案（見第十節）。所有 SQL 以 `postgres` 角色（與 SQL Editor 相同，非超級使用者）執行。
 權限測試只用 anon key 與 GoTrue 簽發的使用者 JWT；**service_role 沒有用於任何權限判斷**。
 
 與正式 Supabase 的差異：沒有 Kong（以閘道代替）、本機 Realtime 因測試主機沒有 IPv6 而把 HTTP listener 的 `socket_opts` 由 `:inet6` 改為 `:inet`（`tests/supabase/init/realtime-runtime.exs`，其餘與映像檔相同）、版本可能與雲端不同。
@@ -160,3 +160,29 @@ GoTrue `v2.177.0`、PostgREST `v12.2.3`、Realtime `v2.34.47`，加上取代 Kon
 | 中 | 05 雙組並排且兩側都揭露很長的理由時投影放不下 | 預覽會提醒；需改用「放大此側」＋每頁 1 類或聚焦（Phase 4 設計，未改變） |
 | 低 | Realtime 連線時，同一位學生的另一個分頁最慢 15 秒才同步個人分類 | 同一台平板開兩個分頁才會發生；個人分類的一般儲存刻意不送 Broadcast |
 | 未知 | 實體裝置與正式 Supabase 的行為 | 見第八節「未執行」；**在完成第七節之前，不宣稱可正式上線** |
+
+## 10. 獨立複檢的回應（Phase 5 複檢，`bf92116`）
+
+| # | 嚴重度 | 項目 | 在 `bf92116` 上重現？ | 修正 | 測試 |
+|---|---|---|---|---|---|
+| F1 | P2 | 本機測試閘道不經驗證即可下載測試密鑰，且監聽不限 loopback | ✅ 重現：假 repository root 中的 `tests/supabase/.state/env` → HTTP 200；可從非 loopback 位址（192.0.2.2）連線。**`tests/e2e/shim.js` 有相同問題**（一併修正） | 兩個伺服器改用共用的 `tests/lib/static-site.js`：只供應 `index.html`、`join.html`、`teacher.html`、`projector.html` 與 `js/`、`css/`、`assets/`；拒絕其他路徑、任何以「.」開頭的路徑段、`..`、NUL、反斜線、解碼失敗、符號連結跳出根目錄；以 `path.relative` 判斷真正的目錄邊界；`config.js` 一律由伺服器產生。只監聽 `127.0.0.1`。密鑰移到 repo 之外（`tests/supabase/state_dir.sh`，指向 repo 內時拒絕且不建立目錄） | `tests/unit/static_servers.test.mjs`（8 項，納入 `npm run test:unit`）：16 種越界／編碼／隱藏／密鑰路徑都是 403／404 且回應不含內容；網站檔案仍 200；API 無有效 apikey 為 401；從非 loopback 位址連不上；密鑰目錄不能在 repo 內。修正前 4 項失敗、修正後全過 |
+| D2 補強 | 建議 | 排序判斷在測試中另寫一份 | — | 判斷移到 `js/lib/board-order.js`（`isOlderBoard`）；`js/student/group.js` 的 `adopt()` 與 `tests/db/race_d2.sh` 都呼叫它 | unit 1 項；`race_d2.sh` 3 情境 |
+
+沒有證據顯示正式 Supabase 的任何密鑰外洩：這個閘道只在本機測試使用，密鑰每次隨機產生、測試結束即刪除容器；複檢前的測試在本機容器中執行。
+複檢後重新執行的測試結果見第十一節。
+
+## 11. 複檢修正後重新執行的測試（2026-11-13，本機）
+
+| 指令 | 環境 | 結果 |
+|---|---|---|
+| `npm run test:unit` | Node | 34／34 通過（新增 `static_servers.test.mjs` 8 項、`isOlderBoard` 1 項） |
+| `npm run test:db` | PostgreSQL | 324 項通過 |
+| `npm run test:race` | PostgreSQL 多連線 | 16 情境通過（D2 改以 `isOlderBoard` 判斷） |
+| `npm run test:upgrade` | PostgreSQL＋git | 24 項通過 |
+| `npm run test:concurrency` | PostgreSQL＋pgbench | 通過 |
+| `node tests/e2e/e2e.js` | shim（已改用 `static-site.js`、只監聽 loopback） | 245 項通過 |
+| `node tests/e2e/layout.js`、`touch.js` | shim | 45、39 項通過 |
+| `bash tests/supabase/run.sh` | 本機 Supabase（密鑰在 repo 之外） | 65 項通過 |
+| `bash tests/supabase/e2e_real.sh` | 本機 Supabase | Realtime 7、touch 39、完整 e2e 245，全數通過 |
+
+執行後確認 repository 內沒有建立 `tests/supabase/.state`。正式雲端 Supabase、實體裝置、學校網路仍未驗證（第七、八節）。

@@ -4,7 +4,7 @@
 #   R1：在鎖逾時「之前」開始交易（now() 固定在開始時間），停頓到逾時之後才執行 student_group_board，最後才回來
 #   R2：在逾時之後開始並先完成
 # 檢查：兩個回應的 board_rev／lock_rev／state_rev 完全相同；R1 仍列出鎖（以它自己的 now() 過濾）、R2 沒有；
-#       R1.read_now < R2.read_now；前端的排序規則（js/student/group.js 第 142–147 行）會丟棄較晚到的 R1。
+#       R1.read_now < R2.read_now；前端實際的判斷函式（js/lib/board-order.js isOlderBoard）會丟棄較晚到的 R1。
 #   另一情境：R1 停頓期間鎖被「續約」（lock_rev 不變）→ 兩個回應都列出鎖，排序仍以 read_now 為準、結果一致。
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -30,13 +30,14 @@ psql_ -d "$DB" -c "$TEACH" -c "select public.teacher_set_stage('$SID', '04', '04
 CARD=$(q "select id from public.story_cards order by sort_order limit 1")
 BOARD="select public.student_group_board('$SID', '$TB')::text"
 
-# 依前端規則比較兩個回應：回傳較新的那一個（a 或 b）。與 js/student/group.js 第 142–147 行相同的判斷。
-newer() { node -e '
+# 以前端實際使用的函式（js/lib/board-order.js 的 isOlderBoard，js/student/group.js adopt() 呼叫它）判斷：
+# 目前採用 a、晚到 b 時，b 是否被丟棄 → 回傳較新的那一個（a 或 b）。不另寫一份判斷，避免兩份邏輯漂移。
+newer() { node --input-type=module -e '
+  import { isOlderBoard } from "'"$ROOT"'/js/lib/board-order.js";
   const [a, b] = [JSON.parse(process.argv[1]), JSON.parse(process.argv[2])];
-  // b 晚到：若任一版本較小，或三個版本相同但 read_now 較小，就丟棄 b
-  const older = b.board_rev < a.board_rev || (b.lock_rev ?? 0) < a.lock_rev || (b.state_rev ?? 0) < a.state_rev
-    || (b.board_rev === a.board_rev && (b.lock_rev ?? 0) === a.lock_rev && (b.state_rev ?? 0) === a.state_rev && (b.read_now ?? 0) < a.read_now);
-  console.log(older ? "a" : "b");' "$1" "$2"; }
+  // 與 adopt() 相同：採用後存的是正規化過的版本號
+  const cur = { board_rev: a.board_rev, lock_rev: a.lock_rev ?? 0, state_rev: a.state_rev ?? 0, read_now: a.read_now ?? 0 };
+  console.log(isOlderBoard(cur, b) ? "a" : "b");' "$1" "$2"; }
 field() { node -e 'const x = JSON.parse(process.argv[1]); console.log(JSON.stringify(x[process.argv[2]]))' "$1" "$2"; }
 
 scenario() {   # $1 名稱 $2 R1 停頓期間要做的事（空＝讓鎖自然逾時）

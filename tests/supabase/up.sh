@@ -2,10 +2,12 @@
 # 啟動隔離的本機 Supabase（db＋GoTrue＋PostgREST＋Realtime＋閘道）。只供測試。
 #   用法：bash tests/supabase/up.sh            # 啟動（資料庫為空，尚未安裝本專案 SQL）
 #         bash tests/supabase/up.sh down       # 停止並刪除容器與資料
-# 隨機產生的密鑰寫在 tests/supabase/.state/env（已列入 .gitignore；不會輸出到畫面）。
+# 隨機產生的密鑰寫在 repository 之外的狀態目錄（預設 ~/.cache/storyship-sbtest，可用 SB_STATE_DIR 指定；不會輸出到畫面）。
+# 不放在 repo 內：測試伺服器供應網站靜態檔，密鑰檔不能位於任何可能被供應的目錄之下（Phase 5 複檢 F1）。
 set -euo pipefail
 cd "$(dirname "$0")"
-HERE=$(pwd); STATE=$HERE/.state; mkdir -p "$STATE"; chmod 700 "$STATE"
+HERE=$(pwd); ROOT=$(realpath ../..)
+STATE=$(bash "$HERE/state_dir.sh")
 if [ "${1:-}" = "down" ]; then
   [ -f "$STATE/gateway.pid" ] && kill "$(cat "$STATE/gateway.pid")" 2>/dev/null || true
   docker compose --env-file "$STATE/env" -f docker-compose.yml down -v --remove-orphans >/dev/null 2>&1 || true

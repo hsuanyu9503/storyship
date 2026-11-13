@@ -4,10 +4,10 @@
 //   * /rest/v1/rpc/:fn、/rest/v1/:table：轉成 SQL，以 anon / authenticated 角色在真實 PostgreSQL 執行
 //   * 不提供 Realtime（用來驗證前端的輪詢備援）
 const http = require('http');
-const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
+const { serveStatic, LOOPBACK } = require('../lib/static-site.js');
 
 const ROOT = path.resolve(process.env.ROOT || path.join(__dirname, '../..'));
 const PORT = Number(process.env.PORT || 8787);
@@ -15,7 +15,6 @@ const SECRET = 'e2e-secret';
 // 連線字串例：postgres://postgres:密碼@127.0.0.1/sf_e2e
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.png': 'image/png', '.md': 'text/plain' };
 
 function send(res, code, body, headers = {}) {
   const h = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*', ...headers };
@@ -132,12 +131,6 @@ http.createServer(async (req, res) => {
   if (p.startsWith('/rest/v1/')) return table(req, res, p.slice('/rest/v1/'.length), u.searchParams);
   if (p.startsWith('/auth/v1/')) return auth(req, res, p);
   if (p.startsWith('/realtime/')) return send(res, 404, { message: 'realtime disabled in e2e' });
-  if (p === '/config.js') {
-    res.writeHead(200, { 'Content-Type': 'text/javascript' });
-    return res.end(`export const CONFIG = { SUPABASE_URL: 'http://localhost:${PORT}', SUPABASE_ANON_KEY: 'e2e-anon' };`);
-  }
-  const f = path.join(ROOT, p === '/' ? 'index.html' : decodeURIComponent(p));
-  if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end('not found'); }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream' });
-  fs.createReadStream(f).pipe(res);
-}).listen(PORT, () => console.log('shim on', PORT));
+  // 靜態檔：只供應網站本身的檔案（tests/lib/static-site.js；Phase 5 複檢 F1）
+  serveStatic(req, res, ROOT, `export const CONFIG = { SUPABASE_URL: 'http://localhost:${PORT}', SUPABASE_ANON_KEY: 'e2e-anon' };`);
+}).listen(PORT, LOOPBACK, () => console.log('shim on', PORT));   // 只監聽 loopback

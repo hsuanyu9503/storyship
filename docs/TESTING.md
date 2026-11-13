@@ -4,7 +4,7 @@
 
 | 指令 | 內容 | 需要 |
 |---|---|---|
-| `npm run test:unit` | 投影內容產生器、分類資料模型、05／07 教師端選擇、揭露紀錄讀取、每頁分類數（25 項） | Node.js 20+ |
+| `npm run test:unit` | 投影內容產生器、分類資料模型、05／07 教師端選擇、揭露紀錄讀取、每頁分類數、小組看板回應新舊判斷、測試伺服器只供應網站檔案且只監聽 loopback（34 項；未安裝 tests/e2e 依賴時略過其中 3 項 shim 測試） | Node.js 20+ |
 | `npm run test:db` | 資料庫行為：權限、加入、狀態機、個人分類、小組共作（冪等、衝突、提交、重新開放、結束保存、隔離）、保留清除、null 版本號、鎖版本、刪除重送、05／06／07 公開與權限、06 類型名稱與要素分開揭露（`tests_disclosure.sql`，直接檢查 `projector_state` 原始 JSON）（324 項） | PostgreSQL 15+ 與 `psql` |
 | `npm run test:race` | 真實連線的競態：個人快照 2 情境＋小組 11 情境（學生加入 vs. 刪除場次、教師結束／暫停 vs. 學生操作、同時提交、移入 vs. 刪除、同時新增、提交 vs. 教師暫停的死結、換組／移出 vs. 進行中的編輯）＋D2 跨鎖逾時的並行讀取 3 情境（`race_d2.sh`，Phase 5） | PostgreSQL＋Node |
 | `npm run test:upgrade` | Phase 1 → 2、Phase 2 → 3、Phase 3 → 4 升級（含上課中資料）、Phase 3 停在 06 時升級、已執行 97af137 升級檔後再升級、升級空窗、單一交易升級檔（原子性）、升級後檢查、回復、再升級，資料不變 | PostgreSQL＋git |
@@ -40,7 +40,11 @@ npm test
 `e2e.js` 的教師帳號可用 `E2E_EMAIL`、`E2E_PASSWORD` 指定（預設為 shim 的 `t1@example.com`／`pass`）。
 
 **本機 Supabase 的密鑰**：`tests/supabase/up.sh` 每次隨機產生 JWT secret、資料庫密碼與 anon／service_role key，寫在
-`tests/supabase/.state/env`（已列入 `.gitignore`），不輸出到畫面。權限測試只使用 anon key 與 GoTrue 簽發的使用者 JWT。
+repository **之外**的狀態目錄（預設 `~/.cache/storyship-sbtest`，`SB_STATE_DIR` 可指定，指向 repo 內會被拒絕），不輸出到畫面。
+權限測試只使用 anon key 與 GoTrue 簽發的使用者 JWT。
+
+**測試伺服器的範圍**：`shim.js` 與 `tests/supabase/gateway.js` 只監聽 `127.0.0.1`，靜態檔只供應網站本身的檔案
+（`tests/lib/static-site.js`；`tests/unit/static_servers.test.mjs` 驗證）。
 
 **確認新測試在修正前會失敗**：`SOFT_FAIL=1 node e2e.js` 讓失敗只記錄、不中止，最後列出所有未通過項；
 `SKIP_F3=1`、`SKIP_B=1` 等可略過個別區塊。做法：`git worktree add <dir> <舊版本>`，把新的 `e2e.js` 複製進去，

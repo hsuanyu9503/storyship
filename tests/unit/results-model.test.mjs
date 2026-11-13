@@ -93,3 +93,16 @@ test('候選 B：每頁分類數只能是 4／2／1，改變時回到第一頁',
   assert.equal(R.setPer(R.emptyCompare(), 'right', 3).per.right, 4);
   assert.equal(R.canonCompare({ per: { left: '1' } }).per.left, 1);
 });
+
+test('Phase 5 複檢：小組看板回應新舊判斷（isOlderBoard，adopt() 與 race_d2.sh 共用）', async () => {
+  const { isOlderBoard } = await import('../../js/lib/board-order.js');
+  const cur = { board_rev: 5, lock_rev: 3, state_rev: 7, read_now: 100 };
+  assert.equal(isOlderBoard(null, { board_rev: 1 }), false);
+  assert.equal(isOlderBoard(cur, { board_rev: 4, lock_rev: 9, state_rev: 9, read_now: 999 }), true);
+  assert.equal(isOlderBoard(cur, { board_rev: 5, lock_rev: 2, state_rev: 7, read_now: 999 }), true);
+  assert.equal(isOlderBoard(cur, { board_rev: 5, lock_rev: 3, state_rev: 6, read_now: 999 }), true);
+  assert.equal(isOlderBoard(cur, { board_rev: 5, lock_rev: 3, state_rev: 7, read_now: 99 }), true);   // D2 邊界
+  assert.equal(isOlderBoard(cur, { board_rev: 5, lock_rev: 3, state_rev: 7, read_now: 101 }), false);
+  assert.equal(isOlderBoard(cur, { board_rev: 6, lock_rev: 3, state_rev: 7, read_now: 1 }), false);
+  assert.equal(isOlderBoard({ board_rev: 5, lock_rev: 0, state_rev: 0, read_now: 0 }, { board_rev: 5 }), false);   // 舊版回應沒有 lock_rev 等欄位
+});
