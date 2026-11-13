@@ -30,27 +30,78 @@ export function genreSources(url) {
 // 圖片框：比例由版位決定（slot＝portrait 3:4、landscape 16:9），圖片以完整呈現的方式置中（不裁切、不拉伸）。
 //   * 有多個尺寸時，先量到圖片框實際寬度再設定 srcset／sizes：教師的小預覽與投影各自選用適當尺寸，瀏覽器另依裝置像素比選擇。
 //     量到之前不設定來源，因此不會先下載一張用不到的大圖；只有目前畫面上的這一張會被下載（不預載其他類型）。
-//   * 載入中顯示「圖片載入中…」；載入失敗或沒有圖片時顯示描述文字（替代框）。
+//   * 載入中顯示「圖片載入中…」；沒有圖片時顯示描述文字（替代框）。
+//   * 載入失敗（複檢 F1）：投影端只在公開版本改變時重繪，所以圖片要自己恢復——
+//     顯示替代框與「重新載入圖片」按鈕，並自動重試（2、6、15 秒後，共 3 次）；瀏覽器回到線上時再重試（最多 2 次）。
+//     每次重試用新的 <img>，舊 <img> 的事件一律忽略。圖片框離開畫面（例如切換類型）後，計時器、online 監聽與 ResizeObserver 全部釋放。
+const RETRY_DELAYS = [2000, 6000, 15000];
+const ONLINE_RETRIES = 2;
+const liveBoxes = new Set();
+function sweepBoxes() {
+  const now = Date.now();
+  for (const c of liveBoxes) if (!c.box.isConnected && (c.attached || now - c.created > 5000)) c.dispose();
+}
 function genreVisualBox(url, alt, slot) {
-  const box = h(`div.st-visual.${slot}`, { role: 'img', 'aria-label': alt });
-  const fallback = () => { box.classList.remove('loading'); box.classList.add('missing'); box.replaceChildren(h('span.st-visual-alt', alt)); };
-  if (!url) { fallback(); return box; }
-  box.classList.add('loading');
-  box.removeAttribute('role'); box.removeAttribute('aria-label');
-  const img = h('img', { alt, decoding: 'async', fetchpriority: 'high' });
-  img.addEventListener('load', () => box.classList.remove('loading'));
-  img.addEventListener('error', fallback);
-  const set = genreSources(url);
-  if (!set || typeof ResizeObserver === 'undefined') img.src = url;
-  else {
-    new ResizeObserver((entries) => {
-      const w = Math.round(entries[0].contentRect.width);
-      if (!w) return;
-      img.sizes = w + 'px';
-      if (!img.getAttribute('srcset')) { img.srcset = set.map((x) => `${x.url} ${x.w}w`).join(', '); img.src = set[0].url; }
-    }).observe(box);
+  sweepBoxes();
+  const box = h(`div.st-visual.${slot}`);
+  if (!url) {
+    box.classList.add('missing'); box.setAttribute('role', 'img'); box.setAttribute('aria-label', alt);
+    box.append(h('div.st-visual-fallback', h('span.st-visual-alt', alt)));
+    return box;
   }
-  box.append(img, h('span.st-visual-wait', '圖片載入中…'));
+  const set = genreSources(url);
+  const c = { box, created: Date.now(), attached: false, width: 0, img: null, timer: null, ro: null, auto: 0, online: 0, failed: false, disposed: false };
+  const wait = h('span.st-visual-wait', '圖片載入中…');
+  const fallback = h('div.st-visual-fallback', h('span.st-visual-alt', alt),
+    h('button.st-visual-retry', { type: 'button', onclick: (e) => { e.stopPropagation(); clearTimeout(c.timer); load(); } }, '重新載入圖片'));
+  const onOnline = () => { if (c.failed && c.online < ONLINE_RETRIES && box.isConnected) { c.online++; clearTimeout(c.timer); load(); } };
+  c.dispose = () => {
+    if (c.disposed) return;
+    c.disposed = true; clearTimeout(c.timer); c.ro?.disconnect(); window.removeEventListener('online', onOnline); liveBoxes.delete(c);
+  };
+  function load() {
+    if (c.disposed) return;
+    c.failed = false;
+    fallback.remove();
+    box.classList.remove('missing'); box.classList.add('loading');
+    const img = h('img', { alt, decoding: 'async', fetchpriority: 'high' });
+    img.addEventListener('load', () => {
+      if (c.img !== img) return;
+      box.classList.remove('loading', 'missing');
+      window.removeEventListener('online', onOnline);
+    });
+    img.addEventListener('error', () => {
+      if (c.img !== img) return;
+      if (!box.isConnected && c.attached) { c.dispose(); return; }
+      c.failed = true;
+      box.classList.remove('loading'); box.classList.add('missing');
+      box.append(fallback);
+      window.addEventListener('online', onOnline);
+      if (c.auto < RETRY_DELAYS.length) {
+        const delay = RETRY_DELAYS[c.auto++];
+        c.timer = setTimeout(() => { if (!box.isConnected) { c.dispose(); return; } load(); }, delay);
+      }
+    });
+    if (set) { img.sizes = c.width + 'px'; img.srcset = set.map((x) => `${x.url} ${x.w}w`).join(', '); img.src = set[0].url; }
+    else img.src = url;
+    c.img?.remove();
+    c.img = img;
+    box.prepend(img);
+  }
+  box.classList.add('loading');
+  box.append(wait);
+  liveBoxes.add(c);
+  if (!set || typeof ResizeObserver === 'undefined') { c.attached = true; load(); return box; }
+  c.ro = new ResizeObserver((entries) => {
+    if (!box.isConnected) { if (c.attached) c.dispose(); return; }
+    c.attached = true;
+    const w = Math.round(entries[0].contentRect.width);
+    if (!w) return;
+    if (!c.img) { c.width = w; load(); return; }
+    // 寬度改變（例如投影切換全螢幕）時更新 sizes；失敗中的圖片不更新，以免瀏覽器自行重新請求
+    if (Math.abs(w - c.width) > 1 && !c.failed) { c.width = w; c.img.sizes = w + 'px'; }
+  });
+  c.ro.observe(box);
   return box;
 }
 const genreAlt = (name) => `「${name}」類型情境插畫（觀察線索）`;

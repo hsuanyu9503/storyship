@@ -170,7 +170,10 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
 .st-visual-wait { position: absolute; display: none; font-size: 1.6cqw; color: var(--muted); }
 .st-visual.loading .st-visual-wait { display: block; }
 .st-visual.missing { border: .2cqw dashed var(--line); background: #f6f7f4; }
-.st-visual-alt { padding: 1.5cqw; text-align: center; color: var(--muted); font-size: 1.7cqw; line-height: 1.4; }
+.st-visual.missing img { display: none; }
+.st-visual-fallback { display: flex; flex-direction: column; align-items: center; gap: 1cqw; padding: 1.5cqw; }
+.st-visual-alt { text-align: center; color: var(--muted); font-size: 1.7cqw; line-height: 1.4; }
+.st-visual-retry { font-size: 1.3cqw; padding: .4cqw 1.2cqw; min-height: 0; border-radius: 99px; background: #fff; border: .15cqw solid var(--line); color: var(--muted); cursor: pointer; }
 /* 06：直式主圖（高度＝畫面可用高度，寬度依 3:4）＋類型名稱與三項常見特色（三列） */
 .st-genre { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3.5cqw; padding: 4cqw 5cqw; align-items: center; }
 .st-genre > .st-visual.portrait { height: 47cqw; width: auto; }
