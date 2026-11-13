@@ -172,3 +172,41 @@ Phase 2 **沒有新增或修改資料表**，不會刪除任何資料。在 SQL 
 * 修正 RPC：只重跑 `002_rpc.sql` 與 `003_security.sql`。
 * 新增資料表欄位：會提供新的 `004_….sql`，只需執行新檔案。
 * **不要**重跑 `001_init.sql`（會因資料表已存在而失敗，不會刪除資料）。
+
+---
+
+## G. 上線順序、相容性與失敗恢復（Phase 5）
+
+Phase 5 **沒有任何資料庫變更**（`supabase/` 與 Phase 4 完全相同），只更新網站（`js/teacher/results.js`、`css/app.css`）。
+
+### 部署順序
+
+1. **先資料庫**：在 SQL Editor 執行 `supabase/upgrade/upgrade.sql`（已是 Phase 4 的資料庫也可再執行一次，結果不變）→ 17 列都應為 `true`。
+2. **再網站**：把 Phase 5 合併到 `main`，等 GitHub Pages 部署完成（約 1 分鐘）。
+3. 所有教師、投影、學生裝置**重新整理**一次。
+4. 用 `docs/TEACHER_CHECKLIST.md` 第二節做一次課前檢查。
+
+**不要在上課中部署**。網站更新不影響資料，但上課中的裝置會在重新整理前繼續用舊版畫面。
+
+### 相容性
+
+| 資料庫 | 網站 | 可以上課？ |
+|---|---|---|
+| Phase 4（含本版） | Phase 5 | ✅ |
+| Phase 4 | Phase 4 | ✅（沒有 Phase 5 的修正：兩台教師裝置公開後可能顯示錯誤的「尚未公開」；平板按鈕較小） |
+| Phase 3 或更早 | Phase 5 | ❌ 05、07 無法公開（缺少 Phase 4 的函式）→ 先執行 `upgrade.sql` |
+
+### 失敗恢復
+
+| 狀況 | 處理 |
+|---|---|
+| `upgrade.sql` 執行中出錯 | 整個交易自動回復，資料庫維持原狀；修正原因後重新執行 |
+| `upgrade.sql` 完成但檢查有 `false` | 升級已生效、不會自動回復；依該列名稱處理後重新執行 `upgrade.sql` |
+| 網站更新後異常 | 在 GitHub 把 `main` 退回上一個合併（Revert）；**資料庫不需要動**（Phase 4 網站與同一個資料庫相容） |
+| 需要退回 Phase 3 | 依 `docs/PHASE4.md` 第八節：Phase 3（`89299af`）的 002 → 003 → `supabase/rollback/phase4_to_phase3.sql`；資料與快照保留。網站也要同時退回 Phase 3 |
+
+### 已在本機驗證的部分與尚未驗證的部分
+
+* 在**隔離的本機 Supabase**（Supabase 官方 Postgres 映像檔、GoTrue、PostgREST、Realtime；`tests/supabase/`）驗證了：
+  全新安裝、從 Phase 3＋上課中資料升級、重複執行、回復到 Phase 3、再升級；權限邊界與 Realtime 中斷恢復。
+* **尚未在正式（雲端）Supabase 專案驗證**。正式專案上線前請在**另一個測試專案**依上面的順序執行一次，並完成 `docs/PHASE5.md` 第七節的人工驗收表。

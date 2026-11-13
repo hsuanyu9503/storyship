@@ -25,6 +25,7 @@
 //     鎖由伺服器發給、15 秒逾時，持有期間每 5 秒續約；離線裝置的鎖會自動失效。
 //   * 其他組員持有的鎖只會讓「那張卡／那個欄位」暫時不能操作，其餘照常。
 //   * 離線時整個工作區暫停修改（仍可閱讀），重新連線後先讀取最新資料再繼續。
+import { isOlderBoard } from '../lib/board-order.js';
 import { rpc, errorText } from '../lib/api.js';
 import { createSync } from '../lib/sync.js';
 import { h, confirmDialog } from '../lib/dom.js';
@@ -138,13 +139,8 @@ export function createGroup({ client, sessionId, token, groupNumber, onPing }) {
 
   // ---------- 伺服器資料 ----------
   function adopt(b, first = false) {
-    // 較舊的回應：忽略（畫面不回溯）。三個版本來自同一個資料快照，較新的快照沒有任何一個會變小
-    if (!first && server && (b.board_rev < server.board_rev || (b.lock_rev ?? 0) < server.lock_rev
-        || (b.state_rev ?? 0) < server.state_rev)) return;
-    // 三個版本都相同時（例如只有操作鎖逾時）：以讀取交易的時間 read_now 排序。
-    // 它與伺服器過濾逾時鎖所用的 now() 是同一個值，因此鎖清單與 read_now 一致（第三輪複檢 D2 邊界）
-    if (!first && server && b.board_rev === server.board_rev && (b.lock_rev ?? 0) === server.lock_rev
-        && (b.state_rev ?? 0) === server.state_rev && (b.read_now ?? 0) < server.read_now) return;
+    // 較舊的回應：忽略（畫面不回溯）。判斷規則見 js/lib/board-order.js（第二、三輪複檢 D2；Phase 5 改為共用函式）
+    if (!first && isOlderBoard(server, b)) return;
     const cats = new Map(b.categories.map((c) => [c.id, c]));
     const place = new Map(b.placements.map((p) => [p.card_id, { cat: p.category_id, rev: p.rev }]));
     server = { board_rev: b.board_rev, lock_rev: b.lock_rev ?? 0, state_rev: b.state_rev ?? 0, read_now: b.read_now ?? 0, status: b.status,

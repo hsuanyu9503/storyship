@@ -138,6 +138,9 @@ function renderState(sessionId, token, st) {
   }
   document.body.classList.toggle('focus-mode', Boolean(st.state.focus_mode) || explore);
   const view = st.session.status === 'ended' ? 'end' : STUDENT_VIEW[st.state.phase] || 'watch';
+  // 不屬於目前畫面的工作區一律先卸載（04 → 03 → 04 時要重新掛上小組工作區，不能沿用已被換掉的那一個；Phase 5）
+  if (view !== 'personal' && personal) { personal.destroy(); personal = null; }
+  if (view !== 'group' && group) { group.destroy(); group = null; }
 
   // 03：分類工作區自行處理後續的狀態更新（暫停、提交、鎖定），不整頁重畫
   if (view === 'personal') {
@@ -151,7 +154,6 @@ function renderState(sessionId, token, st) {
     personal.update(st);
     return;
   }
-  if (personal) { personal.destroy(); personal = null; }
 
   // 04：小組共作工作區同樣自行處理後續更新；即時資料更新時不卸載畫面（閱讀視窗、捲動位置、輸入中的文字都保留）
   if (view === 'group') {
@@ -166,7 +168,6 @@ function renderState(sessionId, token, st) {
     group.update(st);
     return;
   }
-  if (group) { group.destroy(); group = null; }
   // 只有影響畫面的欄位改變才重畫，避免打斷學生操作
   const key = [view, st.state.phase, st.me.group_number, st.me.seat_label, st.state.focus_mode, explore,
                st.can.personal_edit, st.can.group_edit, st.state.editing_paused].join('|');

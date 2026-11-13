@@ -27,6 +27,9 @@ export function createResults(ctx) {
     inflight: { '05': null, '07': null },       // 進行中的預覽請求所屬版本
     syncVer: { '05': -1, '07': -1 },            // 草稿與伺服器的公開選擇最後一次相同時的版本（之後沒修改就跟著伺服器）
     busy: null,                                 // 公開在途：{ phase, ver }
+    // 本裝置公開成功、伺服器回傳的版本號（session_state.rev）。比它舊的讀取結果不能用來同步草稿
+    //（例如公開後的重新讀取失敗、或讀取在公開之前就已送出），否則草稿會被倒回公開前的內容。
+    minRev: { '05': 0, '07': 0 },
     snapData: new Map(),   // snapshot id → data（教師閱讀與列出分類用）
   };
 
@@ -90,7 +93,8 @@ export function createResults(ctx) {
   async function publish(phase) {
     if (st.busy || !previewReady(phase)) return;        // 一次一個；只有與目前選擇相符的預覽完成後才能公開
     const sent = draft(phase);                           // 固定本次送出的選擇；之後的修改不會自動公開
-    st.busy = { phase, ver: st.ver[phase] };
+    const sentVer = st.ver[phase];
+    st.busy = { phase, ver: sentVer };
     ctx.renderAll();
     try {
       const r = await rpc(client, phase === '05' ? 'teacher_publish_compare' : 'teacher_publish_match',
@@ -98,15 +102,31 @@ export function createResults(ctx) {
       if (!r.ok && r.code === 'STALE') {
         toast('公開內容已在另一台裝置更新，已重新載入。你的預覽保留，確認後可再公開。', 'warn', 5000);
       } else if (r.ok) {
+        // 伺服器確認公開了「這次送出的版本」：之後沒有本機修改的話，草稿就與伺服器同步，
+        // 下一次讀到其他裝置的新公開時要跟著更新（Phase 5 R1）。公開期間若已改成別的選擇，則保留那個選擇。
+        st.minRev[phase] = Math.max(st.minRev[phase], Number(r.rev) || 0);
+        if (st.ver[phase] === sentVer) st.syncVer[phase] = sentVer;
         ctx.ping();
       }
     } catch (e) {
-      toast((e.code === 'SAME_GROUP' ? '兩側不能是同一組。' : errorText(e)) + '（尚未公開）', 'error', 5000);
+      // 失敗或結果不明（網路中斷時伺服器可能已寫入）：不當成成功；下面重新讀取後依伺服器內容判斷，不自動重送
+      toast(e.code === 'NETWORK' ? '網路中斷，無法確認是否已公開；恢復連線後會依伺服器的內容顯示。'
+        : (e.code === 'SAME_GROUP' ? '兩側不能是同一組。' : errorText(e)) + '（尚未公開）', 'error', 5000);
     } finally {
+      // 重新讀取（失敗時 sync 會標示離線並繼續輪詢，不影響上面公開結果的判斷）
       await ctx.refresh();
       st.busy = null;
+      syncPhase(phase);   // 公開期間的讀取略過了同步，這裡補做一次
       ctx.renderAll();
     }
+  }
+
+  // 依伺服器狀態同步草稿：與伺服器相同 → 記為已同步；不同且本機沒有修改過 → 跟著伺服器（例如另一台裝置公開了新內容）
+  function syncPhase(phase) {
+    if (!st.draft[phase] || st.busy?.phase === phase) return;
+    if ((Number(S.state?.rev) || 0) < st.minRev[phase]) return;   // 讀到的狀態比自己確認的公開還舊：不同步
+    if (same(phase, st.draft[phase], published(phase) || empty(phase))) st.syncVer[phase] = st.ver[phase];
+    else if (st.ver[phase] === st.syncVer[phase]) { st.draft[phase] = null; st.ver[phase] += 1; }
   }
 
   // ---------- 快照 ----------
@@ -312,13 +332,7 @@ export function createResults(ctx) {
   return {
     panel05, panel07, previewNode, isDirty,
     // 每次重新讀取伺服器狀態時：若教師沒有尚未公開的修改，草稿跟著伺服器（例如另一台裝置公開了新內容）
-    onLive() {
-      for (const phase of ['05', '07']) {
-        if (!st.draft[phase] || st.busy?.phase === phase) continue;
-        if (same(phase, st.draft[phase], published(phase) || empty(phase))) st.syncVer[phase] = st.ver[phase];
-        else if (st.ver[phase] === st.syncVer[phase]) { st.draft[phase] = null; st.ver[phase] += 1; }   // 沒修改過：跟著伺服器
-      }
-    },
+    onLive() { for (const phase of ['05', '07']) syncPhase(phase); },
     key() { return JSON.stringify([st.draft, st.ver, st.preview['05']?.ver, st.preview['07']?.ver, st.previewErr, st.inflight, st.busy, st.snapData.size, S.pub?.projection]); },
   };
 }

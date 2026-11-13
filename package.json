@@ -5,7 +5,7 @@
   "scripts": {
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:db": "bash tests/db/run.sh",
-    "test:race": "bash tests/db/race_snapshot.sh && bash tests/db/race_group.sh",
+    "test:race": "bash tests/db/race_snapshot.sh && bash tests/db/race_group.sh && bash tests/db/race_d2.sh",
     "test:upgrade": "bash tests/db/upgrade.sh && bash tests/db/upgrade_p3.sh && bash tests/db/upgrade_bundle.sh",
     "test:concurrency": "bash tests/db/concurrency.sh",
     "serve": "python3 -m http.server 8080"

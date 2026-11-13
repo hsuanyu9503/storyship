@@ -4,12 +4,15 @@
 
 | 指令 | 內容 | 需要 |
 |---|---|---|
-| `npm run test:unit` | 投影內容產生器、分類資料模型、05／07 教師端選擇、揭露紀錄讀取、每頁分類數（25 項） | Node.js 20+ |
+| `npm run test:unit` | 投影內容產生器、分類資料模型、05／07 教師端選擇、揭露紀錄讀取、每頁分類數、小組看板回應新舊判斷、測試伺服器只供應網站檔案且只監聽 loopback（34 項；未安裝 tests/e2e 依賴時略過其中 3 項 shim 測試） | Node.js 20+ |
 | `npm run test:db` | 資料庫行為：權限、加入、狀態機、個人分類、小組共作（冪等、衝突、提交、重新開放、結束保存、隔離）、保留清除、null 版本號、鎖版本、刪除重送、05／06／07 公開與權限、06 類型名稱與要素分開揭露（`tests_disclosure.sql`，直接檢查 `projector_state` 原始 JSON）（324 項） | PostgreSQL 15+ 與 `psql` |
-| `npm run test:race` | 真實連線的競態：個人快照 2 情境＋小組 11 情境（學生加入 vs. 刪除場次、教師結束／暫停 vs. 學生操作、同時提交、移入 vs. 刪除、同時新增、提交 vs. 教師暫停的死結、換組／移出 vs. 進行中的編輯） | PostgreSQL |
+| `npm run test:race` | 真實連線的競態：個人快照 2 情境＋小組 11 情境（學生加入 vs. 刪除場次、教師結束／暫停 vs. 學生操作、同時提交、移入 vs. 刪除、同時新增、提交 vs. 教師暫停的死結、換組／移出 vs. 進行中的編輯）＋D2 跨鎖逾時的並行讀取 3 情境（`race_d2.sh`，Phase 5） | PostgreSQL＋Node |
 | `npm run test:upgrade` | Phase 1 → 2、Phase 2 → 3、Phase 3 → 4 升級（含上課中資料）、Phase 3 停在 06 時升級、已執行 97af137 升級檔後再升級、升級空窗、單一交易升級檔（原子性）、升級後檢查、回復、再升級，資料不變 | PostgreSQL＋git |
 | `npm run test:concurrency` | 12 個連線、六組同時移動卡片與改名稱 1,800 次，驗證沒有遺失更新；六組同時提交 | PostgreSQL＋`pgbench` |
 | `tests/e2e`（見下） | 瀏覽器端對端：教師、投影、五位獨立學生（第 1 組四位含補加入者）完整走過 00→99，含 03 個人分類與 04 小組共作全流程，以攔截回應製造的交錯測試，以及 05→06→07 的公開流程、兩台教師裝置競爭、離開 03 的共同確認、預覽版本綁定（延遲、反序、失敗、重試、公開在途時修改）、類型揭露範圍（見 PHASE4.md 第十一節） | 上述＋Playwright |
+| `tests/e2e/touch.js` | 觸控與投影驗收（Phase 5）：模擬 iPad／iPad Mini／Pixel 7 的 tap、觸控滑動、螢幕鍵盤（視窗變矮）、連點、斷線；教師平板 05／07 每個控制項的可見性、遮擋與觸控目標大小；以真實流程建立上限內容並量測 16:9 投影 | shim 或真實堆疊＋Playwright |
+| `bash tests/supabase/run.sh` | 隔離的本機 Supabase（Docker：Supabase 官方 Postgres、GoTrue、PostgREST、Realtime）：全新安裝、重複執行、真實 PostgREST 的 API 與權限（anon、場次擁有者、另一位教師、未列入白名單者、跨場次）、Realtime 通知；從 Phase 3＋上課中資料（停在 06）升級、重複升級、回復、再升級 | Docker（可存取 Docker Hub）＋Node＋psql |
+| `bash tests/supabase/e2e_real.sh` | 在上述真實堆疊上執行 `realtime_browser.js`（Realtime 中斷與恢復）、`touch.js`、完整 `e2e.js` | 同上＋Playwright |
 | `tests/e2e/layout.js` | 投影版面在合法上限內容下的實際量測（05 雙組／單組／聚焦／放大單側、07 故事＋理由＋句型鷹架；1920×1080、1280×720、1024×768）：教師可選的方式必須完整可見，其他被裁切的情況必須被教師預覽偵測到 | shim 或任何靜態伺服器＋Playwright |
 
 ### 資料庫測試如何模擬 Supabase
@@ -33,6 +36,15 @@ npm test
 並以 JWT 模擬教師登入。它**不提供 Realtime**，所以端對端測試同時驗證了輪詢備援；
 測試也封鎖所有外部網路請求，確認網站不依賴 CDN。截圖存在 `tests/e2e/.cache/shots/`。
 `e2e.js` 也會用 `pg` 直接**讀取**資料庫（`DATABASE_URL`，只讀）來檢查 `personal_closed_at`、快照數與公開內容。
+
+`e2e.js` 的教師帳號可用 `E2E_EMAIL`、`E2E_PASSWORD` 指定（預設為 shim 的 `t1@example.com`／`pass`）。
+
+**本機 Supabase 的密鑰**：`tests/supabase/up.sh` 每次隨機產生 JWT secret、資料庫密碼與 anon／service_role key，寫在
+repository **之外**的狀態目錄（預設 `~/.cache/storyship-sbtest`，`SB_STATE_DIR` 可指定，指向 repo 內會被拒絕），不輸出到畫面。
+權限測試只使用 anon key 與 GoTrue 簽發的使用者 JWT。
+
+**測試伺服器的範圍**：`shim.js` 與 `tests/supabase/gateway.js` 只監聽 `127.0.0.1`，靜態檔只供應網站本身的檔案
+（`tests/lib/static-site.js`；`tests/unit/static_servers.test.mjs` 驗證）。
 
 **確認新測試在修正前會失敗**：`SOFT_FAIL=1 node e2e.js` 讓失敗只記錄、不中止，最後列出所有未通過項；
 `SKIP_F3=1`、`SKIP_B=1` 等可略過個別區塊。做法：`git worktree add <dir> <舊版本>`，把新的 `e2e.js` 複製進去，
