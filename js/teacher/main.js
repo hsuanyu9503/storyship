@@ -4,7 +4,7 @@ import { createSync } from '../lib/sync.js';
 import { h, mount, toast, confirmDialog } from '../lib/dom.js';
 import { PHASES, phaseById, nextPhase, prevPhase, totalMinutes } from '../lib/phases.js';
 import * as P from '../lib/projection.js';
-import { renderProjection } from '../lib/render-projection.js';
+import { renderProjection, retryVisuals } from '../lib/render-projection.js';
 import { qrDataUrl, joinUrl } from '../lib/qr.js';
 import * as M from '../lib/board-model.js';
 import { createBoardView } from '../lib/board-view.js';
@@ -136,6 +136,7 @@ async function viewConsole(sessionId) {
   const els = {
     head: h('div'), steps: h('nav.steps'), panel: h('section.card.panel'),
     live: h('div.preview-box'), draft: h('div.preview-box'), draftWrap: h('div.draft-wrap'), roster: h('section.card'),
+    imgRetry: h('button.preview-img-retry', { type: 'button', hidden: true, onclick: () => { retryVisuals(S.els.previews); updateImgRetry(); } }, '重新載入預覽圖片'),
   };
   S.els = els;
   mount(root, h('div.page.console',
@@ -143,9 +144,11 @@ async function viewConsole(sessionId) {
     h('div.console-grid',
       h('aside', els.steps),
       h('main', els.panel, els.roster),
-      h('aside.previews',
+      els.previews = h('aside.previews',
         h('div.preview-label.live', '● 投影中（全班看到的畫面）'), els.live,
-        els.draftWrap))));
+        els.draftWrap, els.imgRetry))));
+  // 預覽中的類型圖片載入失敗時：縮小預覽裡的按鈕太小，改在預覽下方提供一般大小的按鈕（只重試教師端自己的圖片，不影響投影）
+  els.previews.addEventListener('st-visual', updateImgRetry);
 
   S.results = createResults({ client, S, renderAll: () => renderAll(), refresh: () => S.sync.refresh(), ping: () => S.sync.ping('state'), teacherGuide });
   S.sync = createSync({
@@ -380,6 +383,10 @@ function renderSteps() {
       h('button.primary', { disabled: !nextPhase(cur), onclick: () => goPhase(nextPhase(cur)) }, '下一環節 →')));
 }
 
+function updateImgRetry() {
+  const b = S.els?.imgRetry; if (!b) return;
+  b.hidden = !S.els.previews.querySelector('.st-visual.failed');
+}
 function renderPreviews() {
   S.els.live.replaceChildren(renderProjection(S.pub, { showQr: false }));
   if (S.state.phase === '06' && S.genrePreview != null) {
@@ -394,6 +401,7 @@ function renderPreviews() {
   } else {
     S.els.draftWrap.replaceChildren();
   }
+  updateImgRetry();
 }
 
 // ----------------------------------------------------------------------

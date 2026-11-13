@@ -171,9 +171,14 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
 .st-visual.loading .st-visual-wait { display: block; }
 .st-visual.missing { border: .2cqw dashed var(--line); background: #f6f7f4; }
 .st-visual.missing img { display: none; }
-.st-visual-fallback { display: flex; flex-direction: column; align-items: center; gap: 1cqw; padding: 1.5cqw; }
-.st-visual-alt { text-align: center; color: var(--muted); font-size: 1.7cqw; line-height: 1.4; }
-.st-visual-retry { font-size: 1.3cqw; padding: .4cqw 1.2cqw; min-height: 0; border-radius: 99px; background: #fff; border: .15cqw solid var(--line); color: var(--muted); cursor: pointer; }
+.st-visual-fallback { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1cqw; padding: 1.5cqw; max-height: 100%; min-height: 0; }
+.st-visual-alt { text-align: center; color: var(--muted); font-size: 1.7cqw; line-height: 1.4; min-height: 0; overflow: hidden; flex: 0 1 auto; }
+/* 重新載入按鈕（複檢 F1）：字級有下限，不隨投影縮小到看不清；空間不夠時描述文字先讓位，按鈕不縮。
+   觸控裝置沿用全站「觸控目標至少 44px」。教師端的縮小預覽不放這顆按鈕，改用預覽下方的一般按鈕（見 .preview-img-retry）。 */
+.st-visual-retry { flex: 0 0 auto; font-size: max(1.3cqw, 15px); line-height: 1.2; padding: .35em 1em; min-height: 0; border-radius: 99px; background: #fff; border: 1px solid var(--line); color: var(--ink); cursor: pointer; white-space: nowrap; }
+@media (pointer: coarse) { .st-visual-retry { min-height: 44px; min-width: 44px; } }
+.previews .st-visual-retry { display: none; }
+.preview-img-retry { margin-top: .4rem; }
 /* 06：直式主圖（高度＝畫面可用高度，寬度依 3:4）＋類型名稱與三項常見特色（三列） */
 .st-genre { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3.5cqw; padding: 4cqw 5cqw; align-items: center; }
 .st-genre > .st-visual.portrait { height: 47cqw; width: auto; }

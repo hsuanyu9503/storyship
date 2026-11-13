@@ -37,10 +37,28 @@ export function genreSources(url) {
 const RETRY_DELAYS = [2000, 6000, 15000];
 const ONLINE_RETRIES = 2;
 const liveBoxes = new Set();
+//   清理（複檢 F2）：離開畫面的圖片框一定會被釋放——建立新圖片框時清一次，另有一個只在還有圖片框時才存在的計時器，
+//   每秒清一次（畫面停在等待／總覽等沒有圖片的畫面時也會清）；所有圖片框都釋放後計時器即停止。
+//   還沒掛上畫面的圖片框有 5 秒寬限（建立後立即插入是正常流程），所以最晚約 6 秒內釋放。
+const GRACE_MS = 5000;
+const SWEEP_MS = 1000;
+let sweepTimer = null;
 function sweepBoxes() {
   const now = Date.now();
-  for (const c of liveBoxes) if (!c.box.isConnected && (c.attached || now - c.created > 5000)) c.dispose();
+  for (const c of liveBoxes) if (!c.box.isConnected && (c.attached || now - c.created >= GRACE_MS)) c.dispose();
 }
+function scheduleSweep() {
+  if (sweepTimer || !liveBoxes.size) return;
+  sweepTimer = setTimeout(() => { sweepTimer = null; sweepBoxes(); scheduleSweep(); }, SWEEP_MS);
+}
+// 測試與教師端用：目前保留的圖片框數、重新載入某個範圍內失敗的圖片（每個失敗的框只發一個請求）
+export function visualBoxCount() { return liveBoxes.size; }
+export function retryVisuals(root) {
+  let n = 0;
+  for (const c of liveBoxes) if (c.failed && !c.disposed && c.box.isConnected && root.contains(c.box)) { c.retry(); n++; }
+  return n;
+}
+const notify = (box, failed) => box.dispatchEvent(new CustomEvent('st-visual', { bubbles: true, detail: { failed } }));
 function genreVisualBox(url, alt, slot) {
   sweepBoxes();
   const box = h(`div.st-visual.${slot}`);
@@ -53,33 +71,37 @@ function genreVisualBox(url, alt, slot) {
   const c = { box, created: Date.now(), attached: false, width: 0, img: null, timer: null, ro: null, auto: 0, online: 0, failed: false, disposed: false };
   const wait = h('span.st-visual-wait', '圖片載入中…');
   const fallback = h('div.st-visual-fallback', h('span.st-visual-alt', alt),
-    h('button.st-visual-retry', { type: 'button', onclick: (e) => { e.stopPropagation(); clearTimeout(c.timer); load(); } }, '重新載入圖片'));
-  const onOnline = () => { if (c.failed && c.online < ONLINE_RETRIES && box.isConnected) { c.online++; clearTimeout(c.timer); load(); } };
+    h('button.st-visual-retry', { type: 'button', onclick: (e) => { e.stopPropagation(); c.retry(); } }, '重新載入圖片'));
+  c.retry = () => { if (c.disposed || !c.failed) return; clearTimeout(c.timer); load(); };
+  const onOnline = () => { if (c.failed && c.online < ONLINE_RETRIES && box.isConnected) { c.online++; c.retry(); } };
   c.dispose = () => {
     if (c.disposed) return;
-    c.disposed = true; clearTimeout(c.timer); c.ro?.disconnect(); window.removeEventListener('online', onOnline); liveBoxes.delete(c);
+    c.disposed = true; c.failed = false; clearTimeout(c.timer); c.ro?.disconnect(); c.ro = null; window.removeEventListener('online', onOnline); liveBoxes.delete(c);
   };
   function load() {
     if (c.disposed) return;
     c.failed = false;
     fallback.remove();
-    box.classList.remove('missing'); box.classList.add('loading');
+    box.classList.remove('missing', 'failed'); box.classList.add('loading');
     const img = h('img', { alt, decoding: 'async', fetchpriority: 'high' });
     img.addEventListener('load', () => {
       if (c.img !== img) return;
-      box.classList.remove('loading', 'missing');
+      box.classList.remove('loading', 'missing', 'failed');
       window.removeEventListener('online', onOnline);
+      if (!c.disposed) notify(box, false);
     });
     img.addEventListener('error', () => {
       if (c.img !== img) return;
+      if (c.disposed) return;
       if (!box.isConnected && c.attached) { c.dispose(); return; }
       c.failed = true;
-      box.classList.remove('loading'); box.classList.add('missing');
+      box.classList.remove('loading'); box.classList.add('missing', 'failed');
       box.append(fallback);
+      notify(box, true);
       window.addEventListener('online', onOnline);
       if (c.auto < RETRY_DELAYS.length) {
         const delay = RETRY_DELAYS[c.auto++];
-        c.timer = setTimeout(() => { if (!box.isConnected) { c.dispose(); return; } load(); }, delay);
+        c.timer = setTimeout(() => { if (c.disposed) return; if (!box.isConnected) { c.dispose(); return; } load(); }, delay);
       }
     });
     if (set) { img.sizes = c.width + 'px'; img.srcset = set.map((x) => `${x.url} ${x.w}w`).join(', '); img.src = set[0].url; }
@@ -91,8 +113,10 @@ function genreVisualBox(url, alt, slot) {
   box.classList.add('loading');
   box.append(wait);
   liveBoxes.add(c);
+  scheduleSweep();
   if (!set || typeof ResizeObserver === 'undefined') { c.attached = true; load(); return box; }
   c.ro = new ResizeObserver((entries) => {
+    if (c.disposed) return;
     if (!box.isConnected) { if (c.attached) c.dispose(); return; }
     c.attached = true;
     const w = Math.round(entries[0].contentRect.width);

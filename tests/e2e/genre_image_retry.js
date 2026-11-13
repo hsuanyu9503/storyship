@@ -7,6 +7,8 @@
 //   5. 成功的圖片不重複下載
 //   6. 教師預覽與投影各自失敗、各自恢復
 //   7. 連續切換畫面後，已移除的圖片框其 ResizeObserver 都已 disconnect
+//   8. 教師平板（觸控，1366×1024、1024×768）：縮小預覽裡不放小按鈕，改在預覽下方顯示一般大小的「重新載入預覽圖片」
+//      （至少 44px 高、完整可見），點一下每個失敗的預覽圖只多一個請求、投影端不受影響（複檢 F1）
 // 需要 shim（資料庫已套用 genre_materials_v1.sql）。
 const { chromium } = require('playwright');
 const { Pool } = require('pg');
@@ -147,6 +149,40 @@ const visual = (page, scope = '.stage') => page.evaluate((scope) => {
     ok(await until(async () => (await visual(T, '.previews'))?.loaded, 25000), `教師預覽：自己的圖片請求失敗後自行恢復（教師端請求 ${timg.count(/^fantasy-portrait/)} 次）`);
     ok(await until(async () => (await visual(P))?.loaded && (await visual(P)).src.startsWith('fantasy-portrait'), 15000), '投影不受教師端的失敗影響');
     await tc.close();
+
+    // 8. 教師平板的預覽重試按鈕
+    for (const [w, hgt] of [[1366, 1024], [1024, 768]]) {
+      const kc = await browser.newContext({ viewport: { width: w, height: hgt }, hasTouch: true });
+      const kimg = await imageControl(kc);
+      kimg.rule = (f) => (f.startsWith('detective-portrait') ? '404' : 'ok');
+      const K = await kc.newPage();
+      await K.goto(`${BASE}/teacher.html#/s/${SID}`);
+      await K.waitForSelector('input[type=email], .genre-pick', { timeout: 15000 });
+      if (await K.locator('input[type=email]').count()) {
+        await K.fill('input[type=email]', process.env.E2E_EMAIL || 't1@example.com'); await K.fill('input[type=password]', process.env.E2E_PASSWORD || 'pass'); await K.click('button[type=submit]');
+      }
+      const pBefore = img.count(/^detective-portrait/);
+      await reveal(1);
+      await K.waitForSelector('.genre-pick', { timeout: 15000 });
+      ok(await until(() => K.evaluate(() => !document.querySelector('.preview-img-retry').hidden), 15000), `${w}x${hgt} 教師平板：預覽圖片失敗時顯示「重新載入預覽圖片」`);
+      await sleep(25000);   // 自動重試用完
+      const m = await K.evaluate(() => {
+        const b = document.querySelector('.preview-img-retry'); const r = b.getBoundingClientRect();
+        const inner = [...document.querySelectorAll('.previews .st-visual-retry')].map((x) => getComputedStyle(x).display);
+        return { coarse: matchMedia('(pointer: coarse)').matches, w: r.width, h: r.height, font: parseFloat(getComputedStyle(b).fontSize),
+                 inView: r.top >= 0 && r.left >= 0 && r.right <= innerWidth, inner, failed: document.querySelectorAll('.previews .st-visual.failed').length };
+      });
+      ok(m.coarse && m.h >= 44 && m.w >= 44 && m.font >= 14 && m.inView && m.inner.every((d) => d === 'none'),
+        `${w}x${hgt} 教師平板：按鈕 ${m.w.toFixed(0)}×${m.h.toFixed(0)}px、字級 ${m.font}px、在畫面內；預覽裡的小按鈕不顯示（${m.inner.join(',')}）`);
+      await K.locator('.preview-img-retry').scrollIntoViewIfNeeded();
+      const before = kimg.count(/^detective-portrait/);
+      await K.tap('.preview-img-retry');
+      await sleep(1500);
+      ok(m.failed >= 1 && kimg.count(/^detective-portrait/) === before + m.failed, `${w}x${hgt} 教師平板：點一下每個失敗的預覽圖只多一個請求（失敗 ${m.failed} 個、多 ${kimg.count(/^detective-portrait/) - before} 次）`);
+      ok(await until(() => K.evaluate(() => !document.querySelector('.preview-img-retry').hidden), 5000), `${w}x${hgt} 教師平板：仍失敗時按鈕維持顯示`);
+      ok(img.count(/^detective-portrait/) - pBefore <= 1, `${w}x${hgt} 教師平板：投影端請求不受教師端重試影響（投影 ${img.count(/^detective-portrait/) - pBefore} 次）`);
+      await kc.close();
+    }
     await pc.close();
   } catch (e) { console.error(e.stack || e.message); fails.push('例外：' + e.message); }
   await pg.end().catch(() => {});
