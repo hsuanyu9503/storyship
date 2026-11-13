@@ -311,6 +311,8 @@ body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 .sc-ghost .sc-img { width: 72px; height: 41px; object-fit: contain; background: #e9e5d8; }
 /* 故事圖片框（看板縮圖與閱讀卡）：16:9 外框，完整呈現（contain），比例不同的圖由背景留白吸收 */
 .st-visual.story { aspect-ratio: 16 / 9; background: #e9e5d8; border-radius: 0; }
+/* 圖片絕對定位填滿圖片框，再以 contain 完整呈現：圖片框高度由比例或外層決定，不受圖片原始比例影響（3:2 的圖不會被上下裁切） */
+.st-visual.story img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .st-visual.story .st-visual-alt { font-size: 15px; color: #52635b; }
 .st-visual.story .st-visual-wait { font-size: 14px; }
 .st-visual.story .st-visual-fallback { gap: 8px; padding: 10px; }

@@ -52,7 +52,14 @@ const reader = (p) => p.evaluate(() => {
     no: front.querySelector('.sr-no')?.textContent, title: front.querySelector('.sr-title')?.textContent, backNo: back.querySelector('.sr-no')?.textContent,
     backTitle: back.querySelector('.sr-title')?.textContent,
     paras: [...back.querySelectorAll('.sr-reading > p')].map((x) => x.textContent), tags: [...back.querySelectorAll('.sr-tags li')].map((x) => x.textContent),
-    img: img ? { src: (img.currentSrc || '').replace(/^.*\/assets\/stories\//, ''), loaded: img.complete && img.naturalWidth > 0, fit: getComputedStyle(img).objectFit } : null,
+    img: img ? (() => { const ir = img.getBoundingClientRect(); const br = img.closest('.st-visual').getBoundingClientRect();
+      // 實際畫出的圖片區域（contain）：必須完整落在圖片框內，比例與原圖相同
+      const k = Math.min(ir.width / img.naturalWidth, ir.height / img.naturalHeight); const dw = img.naturalWidth * k; const dh = img.naturalHeight * k;
+      const dx = ir.left + (ir.width - dw) / 2; const dy = ir.top + (ir.height - dh) / 2;
+      return { src: (img.currentSrc || '').replace(/^.*\/assets\/stories\//, ''), loaded: img.complete && img.naturalWidth > 0, fit: getComputedStyle(img).objectFit,
+        inside: ir.left >= br.left - 0.5 && ir.top >= br.top - 0.5 && ir.right <= br.right + 0.5 && ir.bottom <= br.bottom + 0.5
+          && dx >= br.left - 0.5 && dy >= br.top - 0.5 && dx + dw <= br.right + 0.5 && dy + dh <= br.bottom + 0.5,
+        drawn: `${Math.round(dw)}×${Math.round(dh)} / 框 ${Math.round(br.width)}×${Math.round(br.height)}` }; })() : null,
     flipperT: getComputedStyle(d.querySelector('.sr-flipper')).transform, active: document.activeElement?.closest('.sr-face')?.className || document.activeElement?.className || '' };
 });
 // 量測：元素完整在視窗內、中心點沒有被蓋住
@@ -103,6 +110,10 @@ async function closeReader(p) { await p.locator('dialog.reader[open] .sr-close')
       open: s.querySelector('.sc-open')?.textContent, img: (s.querySelector('.sc-img img')?.currentSrc || '').replace(/^.*\/assets\/stories\//, '') })));
     ok(board.length === 8 && board.every((b, i) => b.no === SRC[i].no && b.title === SRC[i].title && b.open === '閱讀'),
       `03 看板：8 張小卡依序顯示編號、名稱與「閱讀」入口（${board.map((b) => b.no + b.title).join('、')}）`);
+    const thumbFit = await A.evaluate(() => [...document.querySelectorAll('.bd-left .sc-img img')].every((img) => {
+      const ir = img.getBoundingClientRect(); const br = img.closest('.st-visual').getBoundingClientRect();
+      return getComputedStyle(img).objectFit === 'contain' && ir.top >= br.top - 0.5 && ir.bottom <= br.bottom + 0.5 && ir.left >= br.left - 0.5 && ir.right <= br.right + 0.5; }));
+    ok(thumbFit, '03 看板：縮圖完整呈現（contain、圖片元素不超出圖片框，不裁切）');
     ok(board.every((b, i) => b.img === `story-${SRC[i].no}-600w.webp`), `03 看板：縮圖都是 600w WebP（${[...new Set(board.map((b) => b.img.replace(/\d\d/, 'NN')))].join()}）`);
     ok(tA.imgs.every((f) => /-600w\.webp$/.test(f)), `03 看板：載入看板時沒有下載閱讀用大圖（${tA.imgs.length} 個請求，皆為 600w）`);
     ok(!(await A.textContent('.bd')).includes('動物方程市') && !(await A.textContent('.bd')).includes('故事 A'), '03 看板：沒有佔位標題或「動物方程市」');
@@ -115,7 +126,8 @@ async function closeReader(p) { await p.locator('dialog.reader[open] .sr-close')
         `${c.no} ${c.title}：預設正面（編號、名稱），背面隱藏且 inert`);
       await until(async () => (await reader(A))?.img?.loaded, 8000);
       r = await reader(A);
-      ok(r.img?.loaded && /^story-\d\d(-600w)?\.webp$/.test(r.img.src) && r.img.src.startsWith(`story-${c.no}`) && r.img.fit === 'contain', `${c.no}：正面圖片完整呈現（${r.img?.src}、${r.img?.fit}）`);
+      ok(r.img?.loaded && /^story-\d\d(-600w)?\.webp$/.test(r.img.src) && r.img.src.startsWith(`story-${c.no}`) && r.img.fit === 'contain' && r.img.inside,
+        `${c.no}：正面圖片完整呈現、沒有被裁切（${r.img?.src}、${r.img?.fit}、畫出 ${r.img?.drawn}）`);
       await flip(A);
       r = await reader(A);
       ok(r.side === 'back' && r.backNo === c.no && r.backTitle === c.title && r.frontInert && !r.backInert && !r.frontVis && r.backVis,
