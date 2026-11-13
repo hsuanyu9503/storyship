@@ -118,4 +118,4 @@
 修正前對照：`probe_f1f2_before_after.log`（同一支只用兩版共有選擇器的探測程式分別在 `ebe6ba3` 與修正後執行）。新測試直接拿到 `ebe6ba3` 執行時，因依賴新增的 `.failed` 類別／`visualBoxCount()` 而在前置步驟就失敗，不能當作對照，故另附探測紀錄。
 
 修正後重新執行（2026-11-13，本機；只修改 JS／CSS／測試／文件，資料庫測試未重跑）：unit 36、`layout.js` 80、`touch.js` 39、`genre_shots.js` 30、
-`genre_visual_lifecycle.js` 32、`genre_image_retry.js` 26、`e2e.js`（shim）258，全數通過。本機 Supabase（`tests/supabase/e2e_real.sh`）結果見下一行。
+`genre_visual_lifecycle.js` 32、`genre_image_retry.js` 26、`e2e.js`（shim）258，全數通過。本機 Supabase（`tests/supabase/e2e_real.sh`）：Realtime 7、touch 39、e2e 258，全數通過。
