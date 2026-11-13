@@ -199,3 +199,38 @@ P=$(psql_ -d $DB6 -c "select projection::text from public.session_state where se
 echo "$P" | grep -q '"name": "偵探"' && echo "$P" | grep -q 'detective-landscape.webp' && echo "$P" | grep -q '離奇事件與謎團' && ! echo "$P" | grep -q '敏銳觀察與分析' \
   || fail "返回 07 時沒有以新教材重建（同樣只揭露第 0 項）：$P"
 echo "ok - 套用教材後返回 07：依原本的選擇（類型 1、只揭露第 0 項）以新名稱、新特色與橫式圖重建，揭露範圍不變"
+
+# 9. 故事卡教材：已部署的 main（df6fcd8，含小說類型教材）＋停在 04、已有個人快照與小組分類的場次 → 新 upgrade.sql → 故事卡教材腳本
+DB7=story_friends_bundle_cards
+mkdb $DB7 df6fcd8
+git -C "$ROOT" show "df6fcd8:supabase/content/genre_materials_v1.sql" > "$TMP/genre_df6.sql"; chmod 644 "$TMP/genre_df6.sql"
+psql_ -d $DB7 -f "$TMP/genre_df6.sql" >/dev/null 2>&1 || fail "df6fcd8 的小說類型教材"
+psql_ -d $DB7 -c "insert into auth.users (id, email) values ('$T1', 't1@example.com'); insert into public.teachers values ('$T1', 't1@example.com');" >/dev/null
+SID=$(psql_ -d $DB7 -c "$TEACH" -c "select public.teacher_create_session('cards', 2)->>'session_id'" | tail -1)
+CODE7=$(psql_ -d $DB7 -c "select join_code from public.sessions where id = '$SID'")
+TA7=$(printf 'c%.0s' {1..40})
+psql_ -d $DB7 -c "set role anon" -c "select public.student_join('$CODE7', '$TA7', 1)" >/dev/null
+st7() { psql_ -d $DB7 -c "$TEACH" -c "select public.teacher_set_stage('$SID', '$1', '$2', '$3', (select rev from public.session_state where session_id = '$SID'), true)->>'ok'" | tail -1; }
+st7 03 03 '{"screen":"instruction"}' >/dev/null
+CA7=$(psql_ -d $DB7 -c "select id from public.story_cards where slug = 'story-a'"); K7=$(psql_ -d $DB7 -c "select gen_random_uuid()")
+psql_ -d $DB7 -c "set role anon" -c "select public.student_save_personal('$SID', '$TA7', '{\"categories\":[{\"id\":\"$K7\",\"name\":\"x\"}],\"placements\":{\"$CA7\":\"$K7\"}}', 0)" >/dev/null
+st7 04 04 '{"screen":"instruction"}' >/dev/null
+GC7=$(psql_ -d $DB7 -c "set role anon" -c "select public.group_add_category('$SID', '$TA7')->>'category_id'" | tail -1)
+psql_ -d $DB7 -c "set role anon" -c "select public.group_move_card('$SID', '$TA7', '$CA7', '$GC7', 0)" >/dev/null
+W7() { psql_ -d $DB7 -c "select md5(coalesce((select string_agg(data::text, '|' order by participant_id) from public.personal_boards), '') || coalesce((select string_agg(t::text, '|' order by t::text) from public.personal_snapshots t), '')
+  || coalesce((select string_agg(card_id || ':' || category_id, '|' order by card_id) from public.group_placements), '') || (select md5(projection::text || rev) from public.session_state where session_id = '$SID'))"; }
+C7() { psql_ -d $DB7 -c "select md5(string_agg(id || slug || sort_order || title || detail || coalesce(image_url, ''), '|' order by slug)) from public.story_cards"; }
+WB7=$(W7); CB7=$(C7)
+[ "$(psql_ -d $DB7 -c "select count(*) from public.personal_snapshots")" -ge 1 ] && [ "$(psql_ -d $DB7 -c "select count(*) from public.group_placements")" = "1" ] || fail "前置：快照或小組分類"
+psql_ -d $DB7 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 df6fcd8 升級失敗"
+verify_ok $DB7 || { psql_ -d $DB7 -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
+[ "$(W7)" = "$WB7" ] && [ "$(C7)" = "$CB7" ] || fail "升級本身改動了分類、快照、場次或故事卡（應由教材腳本另外執行）"
+[ "$(psql_ -d $DB7 -c "set role anon" -c "select (public.student_cards('$SID', '$TA7') -> 0 ->> 'elements')" | tail -1)" = "[]" ] || fail "升級後舊故事卡的 elements 應為空陣列"
+echo "ok - 從已部署的 main（df6fcd8）＋停在 04 的場次升級：elements 欄位就緒（舊卡為空陣列）、17 項全過；分類、快照、場次與故事卡都不變"
+cp "$ROOT/supabase/content/story_cards_v1.sql" "$TMP/cards.sql"; chmod 644 "$TMP/cards.sql"
+psql_ -d $DB7 -c "update public.session_state set updated_at = now() - interval '3 hours'" >/dev/null
+psql_ -d $DB7 -f "$TMP/cards.sql" >/dev/null 2>&1 || fail "升級後套用故事卡教材失敗"
+[ "$(W7)" = "$WB7" ] || fail "故事卡教材改動了分類、快照或場次"
+[ "$(psql_ -d $DB7 -c "set role anon" -c "select (public.student_cards('$SID', '$TA7') -> 0 ->> 'title')" | tail -1)" = "神奇柑仔店" ] || fail "套用後學生讀到的不是正式故事"
+[ "$(psql_ -d $DB7 -c "set role anon" -c "select public.student_group_board('$SID', '$TA7')::text" | tail -1 | grep -c "$CA7")" = "1" ] || fail "套用後小組分類中的故事 id 不見了"
+echo "ok - 套用故事卡教材：同一場次的個人分類、快照與小組分類（以故事 id 記錄）完全不變，學生讀到正式名稱"

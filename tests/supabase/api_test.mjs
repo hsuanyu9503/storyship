@@ -165,6 +165,15 @@ const guide = await t1.from('content_sets').select('genre_teacher_guide').limit(
 ok(!guide.error && guide.data[0]?.genre_teacher_guide?.reminder?.includes('不是每個故事都必須全部符合'), '真實 PostgREST：教師讀得到共同補充');
 const guideAnon = await s.from('content_sets').select('genre_teacher_guide').limit(1);
 ok(Boolean(guideAnon.error) && guideAnon.error.code === '42501', '真實 PostgREST：匿名讀不到教師共同補充（42501）');
+// 故事卡正式教材（run.sh 已套用 story_cards_v1.sql）：學生經由 student_cards 讀到名稱、全文與元素；匿名不能直接讀資料表
+const sc = await s.rpc('student_cards', { p_session: SID, p_token: toks[0] });
+ok(!sc.error && sc.data.length === 8 && sc.data[3].title === '動物方城市' && JSON.stringify(sc.data[3].elements) === JSON.stringify(['動物世界', '失蹤案件', '蒐集線索', '追查真相', '夥伴合作'])
+   && sc.data[3].image_url === 'assets/stories/story-04.webp' && sc.data[3].detail.split('\n').length === 3,
+   '真實 PostgREST：學生讀到正式故事卡（名稱、三段介紹、故事元素、WebP 圖片路徑）');
+const scAnon = await s.from('story_cards').select('elements').limit(1);
+ok(Boolean(scAnon.error) && scAnon.error.code === '42501', '真實 PostgREST：匿名不能直接讀 story_cards（42501）');
+const scT = await t1.from('story_cards').select('slug, title, elements').order('sort_order');
+ok(!scT.error && scT.data.length >= 8 && scT.data[0].title === '神奇柑仔店' && scT.data[0].elements[0] === '神奇零食', '真實 PostgREST：教師讀得到故事元素');
 
 // ---------- Realtime：收到變更通知；中斷時輪詢仍能取得正確狀態 ----------
 const rt = anon();

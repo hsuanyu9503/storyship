@@ -1,0 +1,17 @@
+作品編號,作品,原檔,原檔尺寸,原檔位元組,輸出,輸出尺寸,輸出位元組,壓縮設定,PSNR(dB，對同尺寸未壓縮圖),SHA-256 前 16 碼
+01,神奇柑仔店,source-assets/stories/神奇柑仔店.jpg,1621×1080,337110,assets/stories/story-01.webp,1200×800,101172,WebP 有損 q85 method 6、Lanczos 等比縮小,39.6,60de4b3e00ec2cec
+01,神奇柑仔店,source-assets/stories/神奇柑仔店.jpg,1621×1080,337110,assets/stories/story-01-600w.webp,600×400,42632,WebP 有損 q85 method 6、Lanczos 等比縮小,37.0,6d927a8c297a6ee2
+02,鬼滅之刃,source-assets/stories/鬼滅之刃.png,1672×941,3002750,assets/stories/story-02.webp,1200×675,254284,WebP 有損 q85 method 6、Lanczos 等比縮小,30.9,4643a2b64c849708
+02,鬼滅之刃,source-assets/stories/鬼滅之刃.png,1672×941,3002750,assets/stories/story-02-600w.webp,600×338,88302,WebP 有損 q85 method 6、Lanczos 等比縮小,28.1,bec06f6d14c73114
+03,國家寶藏,source-assets/stories/國家寶藏.png,1672×941,2567363,assets/stories/story-03.webp,1200×675,149566,WebP 有損 q85 method 6、Lanczos 等比縮小,35.9,a43f700a5a2aea59
+03,國家寶藏,source-assets/stories/國家寶藏.png,1672×941,2567363,assets/stories/story-03-600w.webp,600×338,51040,WebP 有損 q85 method 6、Lanczos 等比縮小,33.9,7ec9a51a4fed68a4
+04,動物方城市,source-assets/stories/動物方程市.png,1672×941,2701551,assets/stories/story-04.webp,1200×675,172370,WebP 有損 q85 method 6、Lanczos 等比縮小,34.4,471bf4e844e0d951
+04,動物方城市,source-assets/stories/動物方程市.png,1672×941,2701551,assets/stories/story-04-600w.webp,600×338,60228,WebP 有損 q85 method 6、Lanczos 等比縮小,31.3,33abecc6fd38e2a5
+05,北海小英雄,source-assets/stories/北海小英雄.png,1672×941,2690824,assets/stories/story-05.webp,1200×675,184146,WebP 有損 q85 method 6、Lanczos 等比縮小,34.8,28ec7c4b2ec84647
+05,北海小英雄,source-assets/stories/北海小英雄.png,1672×941,2690824,assets/stories/story-05-600w.webp,600×338,65128,WebP 有損 q85 method 6、Lanczos 等比縮小,31.4,1de522f745577d95
+06,寶可夢,source-assets/stories/寶可夢.jpg,3200×1800,893350,assets/stories/story-06.webp,1200×675,207982,WebP 有損 q85 method 6、Lanczos 等比縮小,33.9,b9ac8280f899e252
+06,寶可夢,source-assets/stories/寶可夢.jpg,3200×1800,893350,assets/stories/story-06-600w.webp,600×338,65922,WebP 有損 q85 method 6、Lanczos 等比縮小,31.4,e4c33a53ec261613
+07,功夫熊貓,source-assets/stories/功夫熊貓.jpg,4032×2268,586020,assets/stories/story-07.webp,1200×675,81186,WebP 有損 q85 method 6、Lanczos 等比縮小,38.6,d45fc941b758e08b
+07,功夫熊貓,source-assets/stories/功夫熊貓.jpg,4032×2268,586020,assets/stories/story-07-600w.webp,600×338,33386,WebP 有損 q85 method 6、Lanczos 等比縮小,36.2,7d7fcc21b9f0e1cc
+08,倚天屠龍記,source-assets/stories/倚天屠龍記.png,1672×941,2543225,assets/stories/story-08.webp,1200×675,142158,WebP 有損 q85 method 6、Lanczos 等比縮小,36.9,4997dbbf3313e6c9
+08,倚天屠龍記,source-assets/stories/倚天屠龍記.png,1672×941,2543225,assets/stories/story-08-600w.webp,600×338,57376,WebP 有損 q85 method 6、Lanczos 等比縮小,34.4,63c1f9d949f6c456
