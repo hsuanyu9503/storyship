@@ -45,6 +45,8 @@
 * [`docs/TEACHER_CHECKLIST.md`](docs/TEACHER_CHECKLIST.md)：教師課前檢查表
 * [`docs/GENRE_MATERIALS.md`](docs/GENRE_MATERIALS.md)：小說類型教材（06／07 正式文字、圖片、教師補充、相容策略）
 * [`docs/REVIEW_HANDOFF_GENRE.md`](docs/REVIEW_HANDOFF_GENRE.md)：小說類型教材複檢交接
+* [`docs/STORY_CARDS.md`](docs/STORY_CARDS.md)：第 03／04 環節的故事卡教材（八部作品、WebP 圖片、雙面閱讀卡、待確認事項）
+* [`docs/REVIEW_HANDOFF_STORY_CARDS.md`](docs/REVIEW_HANDOFF_STORY_CARDS.md)：故事卡教材複檢交接
 
 ## 目錄
 

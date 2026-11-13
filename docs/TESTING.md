@@ -11,6 +11,9 @@
 | `npm run test:concurrency` | 12 個連線、六組同時移動卡片與改名稱 1,800 次，驗證沒有遺失更新；六組同時提交 | PostgreSQL＋`pgbench` |
 | `tests/e2e`（見下） | 瀏覽器端對端：教師、投影、五位獨立學生（第 1 組四位含補加入者）完整走過 00→99，含 03 個人分類與 04 小組共作全流程，以攔截回應製造的交錯測試，以及 05→06→07 的公開流程、兩台教師裝置競爭、離開 03 的共同確認、預覽版本綁定（延遲、反序、失敗、重試、公開在途時修改）、類型揭露範圍（見 PHASE4.md 第十一節） | 上述＋Playwright |
 | `bash tests/db/genre_materials.sh`（`npm run test:db` 會執行） | 小說類型教材腳本：進行中場次與順序不符時中止、依 slug 更新、id／排序／場次狀態不變、可重複執行、備份；06 直式／07 橫式、缺圖回退；教師補充權限；回復與再套用 | PostgreSQL |
+| `bash tests/db/story_cards.sh`（`npm run test:db` 會執行） | 故事卡教材腳本：進行中場次與順序不符時中止、八張依 slug 一對一更新且與 Word 原稿逐字相同（重新讀 docx 比對）、id／排序／個人與小組分類／快照／場次／投影／小說類型教材不變、可重複執行、備份、回復與再套用、舊資料（無元素、無圖）相容、`elements` 必須是陣列、權限 | PostgreSQL＋Python 3 |
+| `node tests/e2e/story_reader.js` | 03／04 的故事卡與雙面閱讀卡（八張逐一：編號、名稱、圖片、段落、元素；開啟、翻面、捲動、翻回、關閉；1366×1024、1024×768、768×1024 的字級、按鈕、溢出與最長文案；動畫、快速連點、減少動態效果；鍵盤與焦點；拖曳與點選移動不受影響；兩位組員互不影響、沒有寫入請求；WebP 尺寸選擇、失敗與恢復、移除後釋放；07 投影小卡） | `setup_story_db.sh` 建立的 sf_story＋對應的 shim＋Playwright |
+| `node tests/e2e/story_shots.js` | 故事卡截圖（看板、閱讀卡正反面，三種尺寸，像素比 2）與翻面錄影（WebM） | 同上 |
 | `node tests/e2e/genre_image_retry.js` | 類型圖片載入失敗後的恢復（06、07；公開版本不變）、online 事件、永久 404 的重試上限與手動重試、切換類型後取消舊圖重試、成功不重複下載、教師預覽與投影各自恢復、ResizeObserver 釋放、教師平板（觸控 1366×1024、1024×768）預覽下方的「重新載入預覽圖片」尺寸與點擊 | shim＋Playwright |
 | `node tests/e2e/genre_visual_lifecycle.js` | 投影（觸控 1024×768、1600×900、1920×1080）06 直式／07 橫式（一般內容，以及 8 張故事＋30 字名稱＋300 字特色、有／無句型鷹架的極端內容）圖片永久失敗時重試按鈕的尺寸（≥44px、字級 ≥15px、完整在圖片框內、不重疊、可點中；小框改為圖示按鈕）與點一下只多一個請求；同一工作內連續重繪 20 次後停在無圖畫面、建立後未掛上、請求中移除的圖片框都會在寬限後釋放 | shim 或任何靜態伺服器＋Playwright |
 | `node tests/e2e/genre_shots.js` | 第 06／07 實際畫面截圖（投影 1600×900、1920×1080，五種類型；教師 iPad 橫向／直向）與每個畫面實際選用、下載的圖片紀錄（`.cache/genre-shots/image-selection.json`） | shim＋Playwright |
@@ -34,7 +37,13 @@ npm run bundle
 ./setup_db.sh                       # 建立 sf_e2e 資料庫與教師 t1@example.com（密碼 pass）
 DATABASE_URL=postgres://postgres:<密碼>@127.0.0.1/sf_e2e npm run shim &   # 本機模擬 Supabase API
 npm test
+# 故事卡正式教材（03／04 的雙面閱讀卡）：另一個資料庫 sf_story（已套用 story_cards_v1.sql）與另一個 shim
+./setup_story_db.sh
+PORT=8789 DATABASE_URL=postgres://postgres:<密碼>@127.0.0.1/sf_story node shim.js &
+BASE=http://localhost:8789 DATABASE_URL=postgres://postgres:<密碼>@127.0.0.1/sf_story node story_reader.js
 ```
+
+`e2e.js` 仍使用佔位故事 A～H（sf_e2e），同時驗證「舊資料（沒有元素、沒有圖片）」的相容路徑。
 
 `shim.js` 是**僅供測試**的小伺服器：把 supabase-js 的 RPC／資料表請求轉成 SQL，以 anon／authenticated 角色在真實 PostgreSQL 執行，
 並以 JWT 模擬教師登入。它**不提供 Realtime**，所以端對端測試同時驗證了輪詢備援；
