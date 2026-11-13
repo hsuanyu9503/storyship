@@ -107,3 +107,15 @@
 
 複檢修正後重新執行（2026-11-13，本機；只修改 JS／CSS，資料庫測試未重跑）：unit 36、`layout.js` 80、`touch.js` 39、`genre_shots.js` 30、`genre_image_retry.js` 16、
 `e2e.js`（shim）258、`tests/supabase/e2e_real.sh`（本機 Supabase：Realtime 7、touch 39、e2e 258），全數通過。
+
+## 9. 第二次獨立複檢的回應（`ebe6ba3`）
+
+| # | 嚴重度 | 項目 | 在 `ebe6ba3` 上重現？ | 修正 | 測試 |
+|---|---|---|---|---|---|
+| F1 | P2 | 重試按鈕在教師縮小預覽中只有約 38×10px、字級 4.6px，並覆蓋觸控 44px 規則 | ✅ 重現（1366×1024 觸控、預覽欄 356px：38.2×9.8px、4.628px、`min-height: 0`） | `css/app.css`：按鈕字級下限 15px、觸控裝置至少 44px，空間不夠時描述文字讓位、按鈕不縮；教師端 `.previews` 內不顯示這顆按鈕，改在預覽下方顯示一般大小的「重新載入預覽圖片」（`js/teacher/main.js`，以 `st-visual` 事件更新；`retryVisuals()` 只重試教師端自己失敗的圖，每個框一個請求） | `genre_visual_lifecycle.js` A 部分（投影觸控 1024×768／1600×900／1920×1080，06 直式、07 橫式：≥44px、字級 ≥15px、完整在圖片框與投影內；自動重試用完後點一下只多一個請求）；`genre_image_retry.js` 第 8 項（真正的教師主控台，觸控 1366×1024、1024×768：預覽內小按鈕不顯示、下方按鈕 159×44px、點一下每個失敗預覽圖只多一個請求、投影端不受影響） |
+| F2 | P3 | 第一次 ResizeObserver 回呼前就被替換的圖片框，停在無圖畫面時永不釋放 | ✅ 重現（同一工作內重繪 20 次後停在等待畫面 7 秒：建立 20、disconnect 1） | `js/lib/render-projection.js`：只在還有圖片框時存在的每秒掃描計時器（全部釋放後停止）；未掛上畫面的寬限 5 秒（`>=`）；dispose 後所有回呼（計時器、RO、load／error）都不再有副作用；手動、online、計時器三種重試共用 `c.retry()`，失敗狀態才會發請求，不會同時發兩個 | `genre_visual_lifecycle.js` B 部分：快速重繪 20 次後 7 秒內全部釋放（20／20）、被取代的框不發請求、建立後從未掛上的框寬限後釋放、請求中移除（成功／失敗）都釋放且失敗後不再重試 |
+
+修正前對照：`probe_f1f2_before_after.log`（同一支只用兩版共有選擇器的探測程式分別在 `ebe6ba3` 與修正後執行）。新測試直接拿到 `ebe6ba3` 執行時，因依賴新增的 `.failed` 類別／`visualBoxCount()` 而在前置步驟就失敗，不能當作對照，故另附探測紀錄。
+
+修正後重新執行（2026-11-13，本機；只修改 JS／CSS／測試／文件，資料庫測試未重跑）：unit 36、`layout.js` 80、`touch.js` 39、`genre_shots.js` 30、
+`genre_visual_lifecycle.js` 32、`genre_image_retry.js` 26、`e2e.js`（shim）258，全數通過。本機 Supabase（`tests/supabase/e2e_real.sh`）結果見下一行。
