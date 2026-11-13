@@ -70,8 +70,17 @@ function genreVisualBox(url, alt, slot) {
   const set = genreSources(url);
   const c = { box, created: Date.now(), attached: false, width: 0, img: null, timer: null, ro: null, auto: 0, online: 0, failed: false, disposed: false };
   const wait = h('span.st-visual-wait', '圖片載入中…');
-  const fallback = h('div.st-visual-fallback', h('span.st-visual-alt', alt),
-    h('button.st-visual-retry', { type: 'button', onclick: (e) => { e.stopPropagation(); c.retry(); } }, '重新載入圖片'));
+  const btn = h('button.st-visual-retry', { type: 'button', title: '重新載入圖片', 'aria-label': '重新載入圖片', onclick: (e) => { e.stopPropagation(); c.retry(); } },
+    h('span.st-visual-retry-text', '重新載入圖片'), h('span.st-visual-retry-icon', { 'aria-hidden': 'true' }, '↻'));
+  const fallback = h('div.st-visual-fallback', h('span.st-visual-alt', alt), btn);
+  // 圖片框太小（例如 07 左側內容很多、橫式圖被壓到最矮）放不下完整按鈕時，改成只有圖示的 44×44 圓形按鈕，
+  // 描述文字改為僅供螢幕閱讀器；不縮小字級或觸控尺寸（複檢 87f1853 F1）。尺寸改變時重新判斷。
+  const fit = () => {
+    if (!c.failed || !box.isConnected) return;
+    box.classList.remove('compact');
+    const b = btn.getBoundingClientRect(); const r = box.getBoundingClientRect();
+    if (b.width > 0 && (b.left < r.left + 1 || b.right > r.right - 1 || b.top < r.top + 1 || b.bottom > r.bottom - 1)) box.classList.add('compact');
+  };
   c.retry = () => { if (c.disposed || !c.failed) return; clearTimeout(c.timer); load(); };
   const onOnline = () => { if (c.failed && c.online < ONLINE_RETRIES && box.isConnected) { c.online++; c.retry(); } };
   c.dispose = () => {
@@ -80,9 +89,11 @@ function genreVisualBox(url, alt, slot) {
   };
   function load() {
     if (c.disposed) return;
+    const wasFailed = box.classList.contains('failed');
     c.failed = false;
     fallback.remove();
-    box.classList.remove('missing', 'failed'); box.classList.add('loading');
+    box.classList.remove('missing', 'failed', 'compact'); box.classList.add('loading');
+    if (wasFailed) notify(box, false);   // 重試中：教師端的「重新載入預覽圖片」先隱藏，失敗時再出現
     const img = h('img', { alt, decoding: 'async', fetchpriority: 'high' });
     img.addEventListener('load', () => {
       if (c.img !== img) return;
@@ -97,6 +108,7 @@ function genreVisualBox(url, alt, slot) {
       c.failed = true;
       box.classList.remove('loading'); box.classList.add('missing', 'failed');
       box.append(fallback);
+      fit();
       notify(box, true);
       window.addEventListener('online', onOnline);
       if (c.auto < RETRY_DELAYS.length) {
@@ -122,6 +134,7 @@ function genreVisualBox(url, alt, slot) {
     const w = Math.round(entries[0].contentRect.width);
     if (!w) return;
     if (!c.img) { c.width = w; load(); return; }
+    if (c.failed) fit();
     // 寬度改變（例如投影切換全螢幕）時更新 sizes；失敗中的圖片不更新，以免瀏覽器自行重新請求
     if (Math.abs(w - c.width) > 1 && !c.failed) { c.width = w; c.img.sizes = w + 'px'; }
   });

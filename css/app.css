@@ -177,6 +177,13 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
    觸控裝置沿用全站「觸控目標至少 44px」。教師端的縮小預覽不放這顆按鈕，改用預覽下方的一般按鈕（見 .preview-img-retry）。 */
 .st-visual-retry { flex: 0 0 auto; font-size: max(1.3cqw, 15px); line-height: 1.2; padding: .35em 1em; min-height: 0; border-radius: 99px; background: #fff; border: 1px solid var(--line); color: var(--ink); cursor: pointer; white-space: nowrap; }
 @media (pointer: coarse) { .st-visual-retry { min-height: 44px; min-width: 44px; } }
+.st-visual-retry-icon { display: none; }
+/* 放不下完整按鈕的小圖片框：只有圖示的 44×44 圓形按鈕；描述文字保留給螢幕閱讀器 */
+.st-visual.compact .st-visual-fallback { padding: 0; }
+.st-visual.compact .st-visual-alt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.st-visual.compact .st-visual-retry { width: 44px; height: 44px; min-height: 44px; min-width: 44px; padding: 0; border-radius: 50%; font-size: 24px; line-height: 1; display: grid; place-items: center; }
+.st-visual.compact .st-visual-retry-text { display: none; }
+.st-visual.compact .st-visual-retry-icon { display: inline; }
 .previews .st-visual-retry { display: none; }
 .preview-img-retry { margin-top: .4rem; }
 /* 06：直式主圖（高度＝畫面可用高度，寬度依 3:4）＋類型名稱與三項常見特色（三列） */

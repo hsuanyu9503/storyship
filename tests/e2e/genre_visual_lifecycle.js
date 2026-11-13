@@ -1,7 +1,8 @@
 // 小說類型圖片框：觸控重試按鈕尺寸（複檢 F1）與圖片框的確定清理（複檢 F2）
 //   用真正的 render-projection.js 與 css/app.css 繪製（不需要資料庫）；需要 shim.js（或任何靜態伺服器）在 BASE 提供專案檔案。
-//   A. 投影（1024×768、1600×900、1920×1080，觸控＝粗指標）：06 直式、07 橫式圖片永久失敗 →
-//      「重新載入圖片」按鈕至少 44×44px、字級 ≥ 15px、完整落在圖片框與投影範圍內；自動重試用完後點一下只多一個請求。
+//   A. 投影（1024×768、1600×900、1920×1080，觸控＝粗指標）：06 直式、07 橫式（一般內容與極端內容、有／無句型鷹架）圖片永久失敗 →
+//      「重新載入圖片」按鈕至少 44×44px、字級 ≥ 15px、完整落在圖片框與投影範圍內、不與其他內容重疊、可點中；
+//      框太小時改為只有圖示的 44×44 按鈕；自動重試用完後點一下只多一個請求。
 //   B. 清理：同一個 JavaScript 工作內連續重繪 20 次再切到沒有圖片的畫面 → 不再建立新圖片框的情況下，6 秒內全部釋放
 //      （ResizeObserver 都 disconnect、保留的圖片框數＝0）；建立後從未掛上畫面的圖片框；移除時圖片請求尚未完成的圖片框。
 //   教師端縮小預覽的按鈕在 genre_image_retry.js 用真正的教師主控台驗證。
@@ -13,11 +14,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const genre06 = (slug, name) => ({ screen: 'genre', view: 'genre', index: 0, total: 5,
   genre: { name, visual_url: `assets/genres/${slug}-portrait.webp`, visual_source: 'portrait', elements: ['一', '二', '三'].map((label) => ({ label, icon: '' })) } });
-const TITLES = ['小紅帽與森林裡的大野狼', '會說話的魔法掃帚', '博物館失竊的寶物之謎', '沙漠探險隊與綠洲', '古代皇宮裡的小書僮', '月亮上的兔子工廠'];
-const match = (slug, name, cards) => ({ screen: 'match', title: '小小故事分類師', group: { group: '第 1 組', number: 1, kind: 'submitted', complete: true },
-  category: { label: '勇敢的主角', unnamed: false, cards: TITLES.slice(0, cards).map((t) => ({ title: t, image_url: null, tracked: false })), reason_state: 'shown', reason: '主角都很勇敢，最後都解決了問題。' },
-  genre: { name, visual_url: `assets/genres/${slug}-landscape.webp`, visual_source: 'landscape', elements: [0, 1, 2].map((i) => ({ slot: i, revealed: true, label: '特色' + i, icon: '', highlight: false })) },
-  scaffold: true });
+const TITLES = ['小紅帽與森林裡的大野狼', '會說話的魔法掃帚', '博物館失竊的寶物之謎', '沙漠探險隊與綠洲', '古代皇宮裡的小書僮', '月亮上的兔子工廠', '消失的第十三號車廂', '海底王國的珍珠項鍊'];
+// 極端內容（各項合法上限）：分類名稱 30 字、共同特色 300 字、8 張故事
+const NAME30 = '主角都很勇敢而且最後都學到一件很重要的事情的那一類好聽的故事們'.slice(0, 30);
+const REASON300 = ('這些故事的主角一開始都遇到困難，後來靠著自己的勇氣和朋友的幫忙解決問題，最後都學到了重要的道理，所以我們把它們分在一起。').repeat(6).slice(0, 300);
+const match = (slug, name, cards, { label = '勇敢的主角', reason = '主角都很勇敢，最後都解決了問題。', scaffold = true } = {}) => ({
+  screen: 'match', title: '小小故事分類師', group: { group: '第 1 組', number: 1, kind: 'submitted', complete: true },
+  category: { label, unnamed: false, cards: TITLES.slice(0, cards).map((t) => ({ title: t, image_url: null, tracked: false })), reason_state: 'shown', reason },
+  genre: { name, visual_url: `assets/genres/${slug}-landscape.webp`, visual_source: 'landscape', elements: [0, 1, 2].map((i) => ({ slot: i, revealed: true, label: ['多以古代為背景', '俠客、門派或幫派', '人物與群體間的恩怨'][i], icon: '', highlight: false })) },
+  scaffold });
 
 async function control(ctx) {
   const c = { reqs: [], mode: '404', hold: null };
@@ -50,7 +55,9 @@ const show = (page, projection) => page.evaluate(async (projection) => {
   try {
     // ---------- A. 投影上的觸控重試按鈕 ----------
     for (const [w, hgt] of [[1024, 768], [1600, 900], [1920, 1080]]) {
-      for (const [label, proj, re] of [['06 直式', genre06('historical', '歷史'), /^historical-portrait/], ['07 橫式（6 張故事）', match('detective', '偵探', 6), /^detective-landscape/]]) {
+      for (const [label, proj, re] of [['06 直式', genre06('historical', '歷史'), /^historical-portrait/], ['07 橫式（6 張故事）', match('detective', '偵探', 6), /^detective-landscape/],
+        ['07 極端（8 張＋30 字名稱＋300 字特色＋句型鷹架）', match('wuxia', '武俠', 8, { label: NAME30, reason: REASON300 }), /^wuxia-landscape/],
+        ['07 極端（8 張＋30 字名稱＋300 字特色，無句型鷹架）', match('adventure', '冒險', 8, { label: NAME30, reason: REASON300, scaffold: false }), /^adventure-landscape/]]) {
         const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, hasTouch: true });
         const img = await control(ctx);
         const page = await ctx.newPage();
@@ -67,11 +74,18 @@ const show = (page, projection) => page.evaluate(async (projection) => {
           const v = b.closest('.st-visual').getBoundingClientRect(); const s = document.querySelector('.stage').getBoundingClientRect();
           const inside = (o) => r.top >= o.top - 0.5 && r.bottom <= o.bottom + 0.5 && r.left >= o.left - 0.5 && r.right <= o.right + 0.5;
           const cs = getComputedStyle(b);
+          // 不與其他內容重疊（圖片框以外的投影內容）
+          const overlap = [...document.querySelectorAll('.st-match-card, .st-chip-card, .st-scaffold, .st-match-reason, .st-match-el, .st-match-gname, .st-cat-name, .st-feature')]
+            .filter((o) => !o.contains(b)).some((o) => { const q = o.getBoundingClientRect(); return r.left < q.right - 1 && r.right > q.left + 1 && r.top < q.bottom - 1 && r.bottom > q.top + 1; });
+          // 點擊位置確實落在按鈕上（沒有被蓋住）
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          const compact = b.closest('.st-visual').classList.contains('compact');
           return { w: r.width, h: r.height, font: parseFloat(cs.fontSize), visible: cs.display !== 'none' && cs.visibility !== 'hidden', inBox: inside(v), inStage: inside(s),
+                   overlap, hit: Boolean(hit && b.contains(hit)), compact, label: b.getAttribute('aria-label'),
                    box: `${Math.round(v.width)}×${Math.round(v.height)}` };
         });
-        ok(m.visible && m.h >= 44 && m.w >= 44 && m.font >= 15 && m.inBox && m.inStage,
-          `${w}x${hgt} ${label}：按鈕 ${m.w.toFixed(1)}×${m.h.toFixed(1)}px、字級 ${m.font}px、完整在圖片框（${m.box}）與投影範圍內`);
+        ok(m.visible && m.h >= 44 && m.w >= 44 && m.font >= 15 && m.inBox && m.inStage && !m.overlap && m.hit && m.label === '重新載入圖片',
+          `${w}x${hgt} ${label}：按鈕 ${m.w.toFixed(1)}×${m.h.toFixed(1)}px${m.compact ? '（圖示）' : ''}、字級 ${m.font}px、完整在圖片框（${m.box}）與投影範圍內、不重疊、可點中`);
         ok(before >= 4 && before <= 6, `${w}x${hgt} ${label}：自動重試用完（共 ${before} 次請求）`);
         await page.tap('.st-visual-retry');
         await sleep(1500);
