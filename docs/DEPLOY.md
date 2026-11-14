@@ -59,8 +59,20 @@
    > anon key 本來就設計為公開，安全由資料庫的 RLS 與 RPC 檢查負責。**絕對不要**放 `service_role` key。
 
 2. 推送到 GitHub。
-3. GitHub repo → **Settings → Pages → Build and deployment**：Source 選 *Deploy from a branch*，Branch 選 `main`、資料夾 `/ (root)`。
-4. 約一分鐘後網站位於 `https://<帳號>.github.io/storyship/`。
+3. GitHub repo → **Settings → Pages → Build and deployment**：Source 選 **GitHub Actions**。
+   之後每次推送到 `main`，`.github/workflows/pages.yml` 會執行 `tools/build_site.sh`，只發布網站需要的檔案：
+   `index.html`、`join.html`、`teacher.html`、`projector.html`、`config.js`、`js/`、`css/`、`assets/`。
+4. 約一分鐘後網站位於 `https://<帳號>.github.io/storyship/`（Actions 分頁可看到部署結果）。
+
+> **不要再用 *Deploy from a branch*。** 這個 repo 有 `.nojekyll`，用分支發布時 GitHub 會原樣公開整個分支，
+> 包括 `docs/intro-source.json`（第 01 環節的答案稿）、`docs/screenshots/`（揭曉截圖）、`source-assets/`（Word 原稿與原始圖）、
+> `supabase/`、`tests/`。若之前用分支發布，改成 GitHub Actions 後這些網址會變成 404。
+>
+> **repo 本身是公開的**：即使網站不發布這些檔案，任何人仍可在 github.com 上的 repo 頁面讀到 `docs/`、`source-assets/` 等檔案。
+> 若不希望學生在課前看到答案，需要另外決定（例如把 repo 改為私人：GitHub 免費方案的私人 repo 不能使用 Pages，需付費方案；
+> 或把教材原稿移到其他私人位置）。這一點本專案沒有自行變更。
+
+本機確認發布內容：`bash tools/build_site.sh`（輸出到 `_site/`，已列入 `.gitignore`），測試：`node tests/e2e/site_build.js`。
 
 網站不需要建置步驟，也不從 CDN 載入任何程式（`js/vendor/` 已包含固定版本的 supabase-js 與 qrcode）。
 

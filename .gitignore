@@ -4,3 +4,4 @@ package-lock.json
 .DS_Store
 tests/supabase/.state/
 __pycache__/
+_site/
