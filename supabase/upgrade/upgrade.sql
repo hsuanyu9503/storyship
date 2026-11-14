@@ -49,6 +49,15 @@ alter table public.session_state add column if not exists disclosure jsonb not n
 alter table public.genres add column if not exists visual_landscape_url text;
 alter table public.content_sets add column if not exists genre_teacher_guide jsonb;
 
+-- 第一環節正式教材（2026-11）：揭曉時的名字變化、揭曉圖替代文字、單元共用文案（可重複執行；舊資料為 null，畫面使用原本的預設文字）
+--   intro_stories.name_before／name_after：例如「工藤新一」→「江戶川柯南」（只在教師按「公布作品」後放進投影）
+--   intro_stories.image_alt：揭曉圖的替代文字（公布後才出現）
+--   content_sets.intro_text：{"opening","compare_prompts":[..],"naming_prompt","bridge_title","bridge_text"}（只有教師可讀；由教師端放進投影）
+alter table public.intro_stories add column if not exists name_before text;
+alter table public.intro_stories add column if not exists name_after text;
+alter table public.intro_stories add column if not exists image_alt text;
+alter table public.content_sets add column if not exists intro_text jsonb;
+
 -- 故事卡正式教材（2026-11）：「值得留意的故事元素」（可重複執行；舊資料為空陣列，背面不顯示元素區）
 --   story_cards.elements：字串陣列，依文件順序，例如 ["神奇零食","實現願望"]；只是閱讀提示，不代表分類答案
 alter table public.story_cards add column if not exists elements jsonb not null default '[]'::jsonb;
@@ -1563,13 +1572,15 @@ union all
 select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
         where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev')
 union all
-select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充、故事元素）',
+select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充、故事元素、第一環節名字變化與文案）',
        (select count(*) from information_schema.columns where table_schema = 'public'
           and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
             or (table_name = 'group_category_tombstones' and column_name = 'result')
             or (table_name = 'genres' and column_name = 'visual_landscape_url')
             or (table_name = 'content_sets' and column_name = 'genre_teacher_guide')
-            or (table_name = 'story_cards' and column_name = 'elements'))) = 6
+            or (table_name = 'story_cards' and column_name = 'elements')
+            or (table_name = 'intro_stories' and column_name in ('name_before', 'name_after', 'image_alt'))
+            or (table_name = 'content_sets' and column_name = 'intro_text'))) = 10
        and to_regprocedure('app.genre_visual(text,text,text)') is not null
        and not has_function_privilege('anon', 'app.genre_visual(text,text,text)', 'execute')
 union all
