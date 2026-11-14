@@ -158,12 +158,20 @@ const LEAK2 = ['神隱少女', '神隱', '千尋', '荻野', '小千', 'chihiro'
       ok(v.imgs.length === 0 && v.clues.length === 3 && !v.text.includes(s.title) && !v.text.includes(s.name_after), `${name}：從揭曉按「上一步」→ 回到三條線索，圖片與答案一起收起`);
       await noLeak([...leak, ...other], `${name} 返回猜題`);
       ok((await nextLabel()) === '公布作品 →', `${name}：返回後下一步仍是「公布作品」`);
-      // 鍵盤：→ 再次公布
+      // 鍵盤：→ 再次公布；這次圖片延遲 1.5 秒才回應，確認圖片出現前後文字位置不變（版位已預留）
+      await pc.route(/\/assets\/intro\/.*\.webp$/, async (route) => { await sleep(1500); route.continue().catch(() => {}); });
+      await P.reload(); await until(async () => (await view()).clues.length === 3, 10000);   // 重新整理：清掉圖片快取的影響
       await T.locator('h2').first().click();   // 焦點不在輸入欄位
       const r2 = await rev();
       await T.keyboard.press('ArrowRight');
       await until(async () => (await rev()) === r2 + 1, 8000);
+      await until(async () => (await view()).text.includes(s.reveal_text), 8000);
+      const pos = () => P.evaluate(() => ['.st-reveal2-title', '.st-names', '.st-reveal2-desc', '.st-clue-recap'].map((q) => { const r = document.querySelector(q).getBoundingClientRect(); return [Math.round(r.top), Math.round(r.left)].join(','); }).join(' '));
+      const before = await pos(); const loadedEarly = (await view()).imgs.some((i) => i.loaded);
       await until(async () => (await view()).imgs.some((i) => i.loaded), 8000);
+      const after = await pos();
+      ok(!loadedEarly && before === after, `${name}：圖片載入前後，作品名稱、名字、說明與線索的位置不變（${before}）`);
+      await pc.unroute(/\/assets\/intro\/.*\.webp$/);
       v = await view();
       ok(v.text.includes(`《${s.title}》`) && v.text.replace(/\s+/g, '').includes(`${s.name_before}→${s.name_after}`) && v.imgs[0]?.alt.includes(s.title),
         `${name}：鍵盤 → 再次公布，圖片與名字仍正確配對`);
@@ -225,8 +233,8 @@ const LEAK2 = ['神隱少女', '神隱', '千尋', '荻野', '小千', 'chihiro'
     await until(async () => (await view()).imgs.some((i) => i.loaded), 8000);
     await checkSizes('神祕故事二・公布', 'size-story2-reveal');
 
-    // ---------- 比較、命名、轉場 ----------
-    await step();
+    // ---------- 比較、命名、轉場（這一步用滑鼠點） ----------
+    { const r0 = await rev(); await nextBtn().click(); await until(async () => (await rev()) === r0 + 1, 8000); ok((await rev()) === r0 + 1, '滑鼠點擊「兩個故事放在一起」前進一步'); }
     await until(async () => (await view()).text.includes(SRC.compare_title), 8000);
     v = await view();
     ok(v.text.includes(SRC.compare_title) && SRC.compare_prompts.every((q) => v.text.includes(q)) && !v.text.includes(SRC.naming_prompt), '兩個故事放在一起：先顯示比較提問（命名提問尚未出現）');

@@ -28,6 +28,7 @@
 | 4 | `supabase/seed/001_placeholder_content.sql` | 佔位素材（故事 A～H、兩個探索故事、五種小說類型的佔位文字） | 是（以 slug 更新，不會重複新增） |
 | 5 | `supabase/content/genre_materials_v1.sql` | 小說類型正式教材（名稱、常見特色、教師補充、圖片；見 `docs/GENRE_MATERIALS.md`） | 是（結果相同） |
 | 6 | `supabase/content/story_cards_v1.sql` | 第 03、04 環節的故事卡正式教材（八部作品的名稱、故事介紹、故事元素、圖片；見 `docs/STORY_CARDS.md`） | 是（結果相同） |
+| 7 | `supabase/content/intro_materials_v1.sql` | 第 01 環節「走進故事世界」正式教材（兩則神祕故事的線索、揭曉、名字變化、揭曉圖與單元文案；見 `docs/INTRO_UNIT.md`） | 是（結果相同） |
 
 每個檔案執行後應顯示 `Success. No rows returned`。最後執行 `supabase/checks/verify.sql`，每一列的 `ok` 都應為 `true`。
 
@@ -283,3 +284,34 @@ Phase 5 **沒有任何資料庫變更**（`supabase/` 與 Phase 4 完全相同�
 * 教材：SQL Editor 執行 `supabase/content/story_cards_v1_rollback.sql`（還原到第一次執行教材腳本前的內容；同樣的保護）。
 * 網站：GitHub 上 Revert 該次合併。`elements` 欄位保留不影響舊網站。
 * **不要**重跑 `supabase/seed/001_placeholder_content.sql`（會把故事與類型改回佔位文字）。
+
+---
+
+## J. 第 01 環節「走進故事世界」正式教材
+
+內容與操作見 [`INTRO_UNIT.md`](INTRO_UNIT.md)。
+
+### 順序（請在沒有課堂時進行）
+
+1. **資料庫結構**：SQL Editor 執行 `supabase/upgrade/upgrade.sql`（新增 `intro_stories.name_before／name_after／image_alt` 與 `content_sets.intro_text`；可重複執行；17 列 `ok` 皆為 `true`）。
+2. **網站**：合併到 `main`，等 GitHub Pages 部署完成（`assets/intro/*.webp` 隨網站一起部署）。
+3. **教材**：SQL Editor 執行 `supabase/content/intro_materials_v1.sql`。結果表應為兩列（intro-1 名偵探柯南、intro-2 神隱少女），`ok` 都是 `true`。
+4. 教師端重新整理；開一個測試場次走一次 01（不必有學生），確認線索、公布與上一步。
+
+新網站遇到尚未執行步驟 3 的資料庫時，01 仍可操作（佔位文字、沒有名字變化與命名提問）；這個混搭**沒有以瀏覽器實測正式資料庫**，請不要在上課前留在混搭狀態。
+
+### 教材腳本的保護（任何一項不符合就整筆中止，資料庫不變）
+
+* 只更新預設素材組的 intro-1、intro-2 與各自 sort_order 1～3 的線索，以及素材組的 `intro_text`；不新增、不刪除、不改 id 與排序。
+* 探索故事順序必須是 intro-1 → intro-2，每則正好三條線索。
+* 有 2 小時內仍有動作的進行中場次時中止。這只是**預檢**，不是維護鎖，請在沒有課堂時執行（可改 `allow_during_class`）。
+* 第一次執行時備份到 `app.intro_material_backups`（前端讀不到）。不碰故事卡、小說類型、場次與學生資料；不重跑佔位 seed。
+
+### 對既有場次的影響
+
+* 01 沒有學生資料。已公開在投影上的 01 畫面保留舊文字，直到教師再次操作 01；之後的操作都使用新教材。
+
+### 回復
+
+* 教材：SQL Editor 執行 `supabase/content/intro_materials_v1_rollback.sql`。
+* 網站：GitHub 上 Revert 該次合併。新欄位保留不影響舊網站。
