@@ -39,11 +39,13 @@ async function until(fn, ms = 10000) { const t = Date.now() + ms; while (Date.no
     const href = await T.getAttribute('a:has-text("開啟投影")', 'href');
     await T.click('text=啟動第一環節：走進故事世界 →');
     await until(async () => (await pg.query('select phase from public.session_state where session_id = $1', [SID])).rows[0].phase === '01');
-    // 舊版的交會畫面（舊版 introProjection 的格式）：只列出已公布的故事
+    // 舊版的交會畫面（舊版 introProjection 的格式）：只列出已公布的故事；seen 為 null 時不寫入（一般新場次）
+    if (seen) {
     const proj = { screen: 'intro', view: 'crossroads', ctl: { view: 'crossroads', index: seen.length ? seen[seen.length - 1] : 0, clues: 3, revealed: seen.length > 0, seen },
       stories: seen.map((i) => ({ title: [S1, S2][i].title, image_url: IMG[i] })) };
     await pg.query("update public.session_state set projection = $2, sub = '01-04', rev = rev + 1 where session_id = $1", [SID, proj]);
     await T.reload();
+    }
     await T.waitForSelector('.intro-next', { timeout: 15000 });
     const P = await (await browser.newContext({ viewport: { width: 1600, height: 900 } })).newPage();
     P.on('pageerror', (e) => errors.push('projector: ' + e.message));
@@ -124,6 +126,36 @@ async function until(fn, ms = 10000) { const t = Date.now() + ms; while (Date.no
       await s.next();
       const cp = await s.proj0();
       ok(cp.view === 'compare' && JSON.stringify(cp.prompts) === JSON.stringify(SRC.compare_prompts), `${L}：直接進入比較題`);
+      // 第三輪：比較頁按上一步 → 回到剛才的柯南揭曉頁（不是千尋）；再上一步 → 柯南三條線索、收起柯南，千尋仍為已公布
+      await s.back();
+      let pj = await s.proj0();
+      ok(pj.view === 'story' && pj.story.index === 0 && pj.story.title === S1.title && pj.story.name_after === S1.name_after && JSON.stringify(pj.ctl.seen) === '[0,1]',
+        `${L}：比較頁按上一步 → 回到剛才公布的《${S1.title}》揭曉頁（投影資料）`);
+      ok(await until(() => s.P.evaluate((t) => document.body.innerText.includes(t) && document.body.innerText.includes('神祕故事一'), `《${S1.title}》`)), `${L}：投影畫面顯示《${S1.title}》揭曉頁`);
+      ok((await s.label2()) === `${SRC.compare_title} →`, `${L}：教師端主要按鈕回到「${SRC.compare_title}」`);
+      await s.back();
+      pj = await s.proj0();
+      ok(pj.view === 'story' && pj.story.index === 0 && pj.story.clues.length === 3 && !pj.story.title && JSON.stringify(pj.ctl.seen) === '[1]',
+        `${L}：再上一步 → 柯南的三條線索、收起柯南答案，seen=[1]（千尋仍為已公布）`);
+      await s.check([0], '收起柯南後');
+      ok((await s.label2()) === '公布作品 →', `${L}：教師端主要按鈕為「公布作品」`);
+      await s.P.context().close();
+    }
+    // ---------- 第三輪：一般新場次（不寫入舊狀態）柯南 → 千尋 → 比較，上一步仍回到千尋 ----------
+    {
+      const L = '一般新場次';
+      const s = await legacySession(null, L);
+      for (let i = 0; i < 11; i++) await s.next();   // 開始、柯南三條＋公布、進入故事二、三條＋公布、比較
+      let pj = await s.proj0();
+      ok(pj.view === 'compare' && JSON.stringify(pj.ctl.seen) === '[0,1]', `${L}：依序公布柯南、千尋後進入比較`);
+      await s.back();
+      pj = await s.proj0();
+      ok(pj.view === 'story' && pj.story.index === 1 && pj.story.title === S2.title, `${L}：比較頁上一步 → 《${S2.title}》揭曉頁`);
+      ok(await until(() => s.P.evaluate((t) => document.body.innerText.includes(t), `《${S2.title}》`)), `${L}：投影畫面顯示《${S2.title}》揭曉頁`);
+      await s.back();
+      pj = await s.proj0();
+      ok(pj.view === 'story' && pj.story.index === 1 && pj.story.clues.length === 3 && !pj.story.title && JSON.stringify(pj.ctl.seen) === '[0]', `${L}：再上一步 → 千尋的三條線索（收起答案）`);
+      await s.check([1], '收起千尋後');
       await s.P.context().close();
     }
     // ---------- seen=[]：沒有任何公布 ----------

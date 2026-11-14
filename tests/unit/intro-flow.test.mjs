@@ -228,3 +228,60 @@ test('第二輪 P1：舊狀態前進後按上一步仍不會公布未公布的�
   assert.equal(b1.view, 'open');
   assert.deepEqual([...leaks(P.introProjection(stories, b1, text), 0), ...leaks(P.introProjection(stories, b1, text), 1)], []);
 });
+
+// ---------- 複查第三輪：比較頁返回到「進入比較前剛揭曉的那一則」，不是編號最大的一則 ----------
+const fwd = (st, k = 1) => { for (let i = 0; i < k; i++) st = P.introNext(stories, st, text); return st; };
+test('第三輪 案例 1：舊場次 seen=[1] 補猜並公布柯南 → 比較 → 上一步回到柯南揭曉；再上一步回到柯南三條線索並收起柯南，千尋仍為已公布', () => {
+  let st = fwd({ view: 'crossroads', index: 1, clues: 3, revealed: true, seen: [1], step: 0 });   // 神祕故事一 線索 0
+  assert.deepEqual([st.view, st.index, st.clues], ['story', 0, 0]);
+  st = fwd(st, 4);                                                                                    // 三條線索＋公布柯南
+  assert.deepEqual([st.index, st.revealed, st.seen], [0, true, [0, 1]]);
+  st = fwd(st);                                                                                       // 進入比較
+  assert.equal(st.view, 'compare');
+  const b1 = P.introBack(stories, st, text);
+  assert.deepEqual([b1.view, b1.index, b1.clues, b1.revealed, b1.seen], ['story', 0, 3, true, [0, 1]]);
+  const pj1 = P.introProjection(stories, b1, text);
+  assert.equal(pj1.story.title, S1.title); assert.equal(pj1.story.name_after, S1.name_after);
+  assert.ok(!JSON.stringify(pj1).includes(S2.name_before), '柯南揭曉頁不含千尋的資料');
+  const b2 = P.introBack(stories, b1, text);
+  assert.deepEqual([b2.view, b2.index, b2.clues, b2.revealed, b2.seen], ['story', 0, 3, false, [1]]);
+  const pj2 = P.introProjection(stories, b2, text);
+  assert.equal(pj2.story.title, undefined);
+  assert.deepEqual(leaks(pj2, 0), []);
+});
+test('第三輪 案例 2：一般新場次（柯南 → 千尋 → 比較）返回仍是千尋揭曉，再返回為千尋三條線索', () => {
+  const seq = walk();
+  const b1 = P.introBack(stories, seq[11], text);
+  assert.deepEqual([b1.index, b1.revealed, b1.clues], [1, true, 3]);
+  const b2 = P.introBack(stories, b1, text);
+  assert.deepEqual([b2.index, b2.revealed, b2.clues, b2.seen], [1, false, 3, [0]]);
+});
+test('第三輪 案例 3：命名提問 → 上一步回到比較提問 → 再上一步回到剛才揭曉的作品（反向舊場次＝柯南；一般＝千尋）', () => {
+  let st = fwd(fwd({ view: 'crossroads', index: 1, clues: 3, revealed: true, seen: [1], step: 0 }, 5), 2);   // 柯南公布 → 比較 → 命名
+  assert.deepEqual([st.view, st.step], ['compare', 1]);
+  let b = P.introBack(stories, st, text);
+  assert.deepEqual([b.view, b.step], ['compare', 0]);
+  b = P.introBack(stories, b, text);
+  assert.deepEqual([b.view, b.index, b.revealed], ['story', 0, true]);
+  const seq = walk();
+  let c = P.introBack(stories, P.introBack(stories, seq[12], text), text);
+  assert.deepEqual([c.view, c.index, c.revealed], ['story', 1, true]);
+  // 轉場 → 上一步 → 命名 → 比較 → 柯南（反向舊場次）
+  st = fwd(st);                                                                                        // 轉場
+  assert.equal(st.view, 'bridge');
+  b = P.introBack(stories, P.introBack(stories, P.introBack(stories, st, text), text), text);
+  assert.deepEqual([b.view, b.index], ['story', 0]);
+});
+test('第三輪 案例 4：index 缺失、越界或指向未公布作品時沿用安全返回（seen 中編號最大的已公布作品）；不新增 seen；沒有有效紀錄回開場；比較題仍只在兩部都公布後', () => {
+  for (const [index, seen, want] of [[undefined, [0, 1], 1], [7, [0, 1], 1], [-1, [1], 1], [1, [0], 0], [0, [1], 1], ['x', [0], 0]]) {
+    const b = P.introBack(stories, { view: 'compare', step: 0, clues: 3, revealed: true, index, seen }, text);
+    assert.deepEqual([b.view, b.index, b.revealed], ['story', want, true], `index ${index} seen ${JSON.stringify(seen)}`);
+    assert.deepEqual(b.seen, [...seen].sort(), '不新增 seen');
+    if (seen.length === 1) assert.deepEqual(leaks(P.introProjection(stories, b, text), 1 - seen[0]), [], '不公布另一部');
+  }
+  for (const seen of [[], [9], undefined]) {
+    assert.equal(P.introBack(stories, { view: 'compare', step: 0, index: 0, seen }, text).view, 'open');
+  }
+  const partial = P.introProjection(stories, { view: 'compare', step: 1, index: 0, seen: [0] }, text);
+  assert.deepEqual(partial.prompts, []);
+});

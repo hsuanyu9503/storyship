@@ -133,7 +133,7 @@ export function introNext(stories, st, text) {
   return null;   // bridge：接下來由「進入下一環節」前往 02
 }
 // 返回只會「收起」，不會新增已公布的故事（複查 P1）：
-//   * 比較／舊版交會畫面返回時，依 seen 中實際已公布、且仍存在的最後一則故事決定回到哪一則的揭曉頁；
+//   * 比較／舊版交會畫面返回時，回到進入比較頁之前揭曉的那一則（狀態中的 index）；index 無效時才用 seen 中編號最大的一則；
 //     舊場次可能只公布了第一則就進入交會畫面（seen: [0]），此時回到第一則的揭曉頁，第二則保持未公布。
 //     沒有任何有效的已公布紀錄時，回到中性的開場畫面。
 //   * 從某一則的開頭返回前一則時，前一則只有在 seen 中才顯示為已公布；否則停在它的三條線索（未公布）。
@@ -145,8 +145,11 @@ export function introBack(stories, st, text) {
   if (st.view === 'compare' || st.view === 'crossroads') {
     if ((st.step || 0) > 0 && st.view === 'compare') return { ...st, step: st.step - 1 };
     if (!seen.length) return { ...introInitial() };
-    const last = Math.max(...seen);
-    return { ...st, view: 'story', index: last, clues: n(last), revealed: true, seen, step: 0 };
+    // 回到進入比較頁之前的那一則揭曉頁（複查第三輪）：introNext 進入比較時保留 index＝剛才揭曉的故事。
+    // 舊場次可能先公布第二則、再補公布第一則，所以不能用「編號最大的已公布故事」推算公布順序。
+    // index 缺失、越界或指向未公布的故事時（例如舊版交會狀態），才改用 seen 中編號最大的一則（安全：一定是已公布的）。
+    const from = Number.isInteger(st.index) && seen.includes(st.index) ? st.index : Math.max(...seen);
+    return { ...st, view: 'story', index: from, clues: n(from), revealed: true, seen, step: 0 };
   }
   if (st.view === 'story') {
     if (st.revealed) return { ...st, revealed: false, seen: markSeen({ seen }, st.index, false) };   // 收起作品圖與答案
