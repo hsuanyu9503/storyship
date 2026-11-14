@@ -63,3 +63,54 @@ BASE=http://localhost:8789 DATABASE_URL=postgres://postgres:<密碼>@127.0.0.1/s
 
 快速雙點測試的點擊方式：`page.touchscreen.tap` 在主要按鈕中心點擊第一下，輪詢到伺服器版本 +1 且按鈕文字已換掉（約 90ms），
 再於同一座標送出第二下，第二下距第一下約 150ms（上限設定 `DOUBLE_MS=300`，可用環境變數調整）。
+
+---
+
+# 第二輪複查修正（基準 `75f7775647743c22570a66c8e6162ade0d625f9d`）
+
+開始時核對：`HEAD`＝`origin/claude/epic-franklin-c9v5yl`＝`75f7775`，沒有後續提交；兩項問題都可重現。
+修正提交：`ace3e6c`（程式與測試）、本段文件所在的提交（文件）。修正後 head 見交付訊息。沒有變更 Pages 設定、合併、部署或操作正式資料庫。
+
+## 已修正並驗證（本輪實際執行）
+
+| # | 問題 | 修正位置（修正後行號） | 修正前（`75f7775`） | 修正後 |
+|---|---|---|---|---|
+| P1 | 舊場次 `crossroads`、`seen=[0]` 按下一步，比較題（提到「新一」「千尋」）提前投影 | `js/lib/projection.js:52-54`（`validSeen`、`firstUnrevealed`、`allRevealed`）、`:69-78`（compare 只在兩部都公布時放比較題與命名題）、`:111-135`（`introNext`：交會／比較／揭曉後先前往尚未公布的第一則，線索從 0 開始，保留 seen）、`:163-180`（按鈕文字） | 以正式教材執行：seen=[0]／[1]／[] 下一步都進入 compare，prompts 含「新一最怕誰認出他？千尋為什麼要記住自己的真名？」。單元測試新增 6 項中 5 項失敗；`intro_legacy.js` 在 75f7775 上 6 項失敗（投影出現「千尋」） | 單元測試 18／18（intro-flow）；`intro_legacy.js` 32／32 |
+| P2 | `tools/build_site.sh` 在檢查前遞迴刪除輸出目錄 | `tools/build_site.sh:1-57`（第 21-44 行：所有檢查在刪除／寫入前；只清理專案的 `_site` 且需空或有標記檔；專案內其他路徑、專案外既有路徑、符號連結一律拒絕；相對路徑依呼叫時目錄解析、上層以實體路徑核對） | 拋棄式副本中：15／19 失敗，例如傳 `assets` 時副本的 `assets` 被刪（標記檔消失）、既有資料夾與符號連結目標被覆寫 | `site_build_safety.sh` 19／19；`site_build.js` 14／14（產物多一個空的標記檔 `.storyship-site-build`） |
+
+`intro_legacy.js` 的檢查方式：從正常教師入口建立場次並啟動 01，把 `session_state.projection` 寫成舊版交會畫面（舊版格式），
+重新整理教師端後只用畫面上的按鈕操作；每一步讀取資料庫中的整份投影、投影端最後一份 API 回應、投影畫面文字、圖片 src／srcset／alt，
+確認沒有未公布那一部的作品名、兩個主角姓名、揭曉文、圖片檔名與比較題中的主角字（新一／千尋）。
+
+## 本輪實際執行的測試與結果（2026-11-14，本機隔離環境）
+
+| 指令 | 結果 |
+|---|---|
+| `npm run test:unit` | 59 通過、0 失敗 |
+| `bash tests/e2e/site_build_safety.sh` | 19 通過 |
+| `node tests/e2e/site_build.js` | 14 通過 |
+| `node tests/e2e/intro_legacy.js`（sf_story） | 32 通過 |
+| `node tests/e2e/intro_flow.js`（正常新場次全流程，含上一步、比較 → 命名 → 轉場 → 02 → 03） | 101 通過 |
+| `node tests/e2e/intro_keys.js`（鍵盤全程、轉場頁進入 02、快速雙點） | 16 通過 |
+| `node tests/e2e/e2e.js`（佔位資料全課程，教師預覽含答案的檢查在內） | 259 通過 |
+
+重現修正前：`git worktree add <資料夾> 75f7775`，`ROOT=<資料夾> PORT=8790 node tests/e2e/shim.js`，
+`BASE=http://localhost:8790 node tests/e2e/intro_legacy.js`；打包：`bash tests/e2e/site_build_safety.sh <75f7775 的 build_site.sh>`（只在拋棄式副本中執行）。
+
+## 失敗
+
+* 無（本輪最後一次執行）。開發中 `intro_legacy.js` 第一次執行有 1 項失敗：返回後太早讀取投影端的 API 回應（仍是上一次輪詢的結果）；
+  測試改為等待 API 回應與資料庫一致後再檢查，產品程式沒有變更。
+
+## 未執行
+
+* 資料庫類測試（`test:db`、`test:upgrade`、race、concurrency）與本機 Supabase 堆疊：本輪沒有修改 SQL、遷移或權限。
+* 實體投影機、平板、簡報筆；Safari、Firefox。
+* 正式站：本環境連不到 `hsuanyu9503.github.io`。
+
+## 上線待辦（需要 repo 管理者，本輪未變更）
+
+1. **合併前**：Settings → Pages 把 Source 從「Deploy from a branch（main／根目錄）」改為「GitHub Actions」。
+2. 部署後確認：`docs/intro-source.json`、`source-assets/intro/` 的 Word 原稿、`docs/screenshots/intro/03-reveal-conan.webp` 皆回傳 404；
+   `assets/intro/conan-1600.webp`、`assets/intro/chihiro-1600.webp` 可以載入。
+3. repo 本身是公開的：`docs/`、`source-assets/` 仍可在 github.com 讀到，是否處理由使用者決定。

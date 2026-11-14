@@ -72,7 +72,13 @@
 > 若不希望學生在課前看到答案，需要另外決定（例如把 repo 改為私人：GitHub 免費方案的私人 repo 不能使用 Pages，需付費方案；
 > 或把教材原稿移到其他私人位置）。這一點本專案沒有自行變更。
 
-本機確認發布內容：`bash tools/build_site.sh`（輸出到 `_site/`，已列入 `.gitignore`），測試：`node tests/e2e/site_build.js`。
+本機確認發布內容：`bash tools/build_site.sh`（輸出到 `_site/`，已列入 `.gitignore`），測試：`node tests/e2e/site_build.js`、`bash tests/e2e/site_build_safety.sh`。
+打包腳本只會清理專案根目錄下、由它自己產生的 `_site`（有 `.storyship-site-build` 標記檔）；指定其他輸出位置時，
+專案內的其他資料夾（例如 `assets`）、專案外已存在的資料夾與符號連結一律拒絕，不刪除也不覆寫。
+
+**上線前的待辦（需要 repo 管理者）**：合併前到 Settings → Pages 把 Source 從「Deploy from a branch」改為「GitHub Actions」。
+部署後確認：`https://<帳號>.github.io/storyship/docs/intro-source.json`、`.../source-assets/intro/`（Word 原稿）、
+`.../docs/screenshots/intro/03-reveal-conan.webp` 都回傳 404，兩張揭曉圖（`assets/intro/conan-1600.webp`、`assets/intro/chihiro-1600.webp`）可以載入。
 
 網站不需要建置步驟，也不從 CDN 載入任何程式（`js/vendor/` 已包含固定版本的 supabase-js 與 qrcode）。
 

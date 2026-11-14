@@ -16,6 +16,8 @@
 | `node tests/e2e/intro_flow.js` | 01 從正常課程入口完整走一次：逐條線索、第三條後停留、公布、上一步收起答案、跨故事返回、觸控連點只前進一步、滑鼠與鍵盤、揭曉前不洩漏答案（畫面、標題、圖片、替代文字、API、學生端）、圖片配對與版位、六種畫面尺寸、教師按鈕、比較／命名／轉場、接到 02／03 分類 | `setup_story_db.sh` 的 sf_story＋對應 shim＋Playwright |
 | `node tests/e2e/intro_keys.js` | 01 複查：只用 PageDown／→ 走完全程並在轉場頁進入 02（只切換一次）；快速雙點（第一下完成刷新後 ≤300ms 的第二下）只公布一次、冷卻後仍可前進；鍵盤連按只前進一步 | sf_story＋對應 shim＋Playwright |
 | `node tests/e2e/site_build.js` | 發布範圍：`tools/build_site.sh` 的產物只有網站檔案、沒有答案稿與原稿、相關網址 404、兩張揭曉圖可載入 | Playwright（不需要資料庫） |
+| `node tests/e2e/intro_legacy.js` | 01 複查第二輪：把場次寫成舊版交會畫面（seen=[0]／[1]／[]）後用新版教師端操作：下一步進入未公布那一則的中性猜題頁、逐條線索與公布、兩部都公布才出現比較題、上一步不公布；每一步檢查整份投影資料、API、畫面與圖片 | sf_story＋對應 shim＋Playwright |
+| `bash tests/e2e/site_build_safety.sh` | 打包腳本的輸出路徑安全：只在拋棄式副本中測試 assets、既有資料夾、符號連結被拒絕且原檔完整；正常與重複打包成功 | bash（不需要資料庫） |
 | `node tests/e2e/story_reader.js` | 03／04 的故事卡與雙面閱讀卡（八張逐一：編號、名稱、圖片、段落、元素；開啟、翻面、捲動、翻回、關閉；1366×1024、1024×768、768×1024 的字級、按鈕、溢出與最長文案；動畫、快速連點、減少動態效果；鍵盤與焦點；拖曳與點選移動不受影響；兩位組員互不影響、沒有寫入請求；WebP 尺寸選擇、失敗與恢復、移除後釋放；07 投影小卡） | `setup_story_db.sh` 建立的 sf_story＋對應的 shim＋Playwright |
 | `node tests/e2e/story_shots.js` | 故事卡截圖（看板、閱讀卡正反面，三種尺寸，像素比 2）與翻面錄影（WebM） | 同上 |
 | `node tests/e2e/genre_image_retry.js` | 類型圖片載入失敗後的恢復（06、07；公開版本不變）、online 事件、永久 404 的重試上限與手動重試、切換類型後取消舊圖重試、成功不重複下載、教師預覽與投影各自恢復、ResizeObserver 釋放、教師平板（觸控 1366×1024、1024×768）預覽下方的「重新載入預覽圖片」尺寸與點擊 | shim＋Playwright |
