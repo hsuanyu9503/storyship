@@ -277,6 +277,7 @@ const LEAK2 = ['神隱少女', '神隱', '千尋', '荻野', '小千', 'chihiro'
     await nextBtn().tap();
     await until(async () => (await view()).text.includes('仔細觀察故事的共同特色'), 10000);
     ok(true, '轉場後進入 02「分類任務啟動」（原有課程順序）');
+    await sleep(800);   // 由 01 轉場頁進入 02 後有 0.7 秒的切換冷卻（避免快速雙點連續切換兩個環節）
     await T.click('button:has-text("開放第三環節：我的故事分類")');
     ok(await until(() => S.evaluate(() => document.querySelectorAll('.sc-read').length === 8), 15000), '03：學生看板有八張故事卡');
     await S.locator('.bd-add').tap(); await S.waitForSelector('.bd-cat');
