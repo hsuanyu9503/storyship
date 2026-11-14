@@ -43,6 +43,10 @@ IDS() { q "select md5(string_agg(i.id || ':' || i.slug || ':' || i.sort_order ||
 STATE() { q "select md5(projection::text || phase || sub || rev) from public.session_state where session_id = '$SID'"; }
 OTHER() { q "select md5((select string_agg(id || title || detail || elements::text, '|' order by slug) from public.story_cards) || (select string_agg(id || name || elements::text, '|' order by slug) from public.genres))"; }
 C0=$(INTRO); I0=$(IDS); S0=$(STATE); P0=$(proj); O0=$(OTHER)
+CONTENT_ONLY() { q "select md5(string_agg(i.slug || i.sort_order || i.title || i.reveal_text || coalesce(i.image_url,'') || coalesce(i.name_before,'') || coalesce(i.name_after,'') || coalesce(i.image_alt,'')
+  || coalesce((select string_agg(c.sort_order || c.kind || c.label || c.body || coalesce(c.image_url,''), ',' order by c.sort_order) from public.intro_clues c where c.story_id = i.id), ''), '|' order by i.slug)
+  || coalesce((select intro_text::text from public.content_sets where is_default), '')) from public.intro_stories i"; }
+CB0=$(CONTENT_ONLY)
 
 # 1. 可能正在上課 → 中止
 OUT=$(psql_ -d "$DB" -f "$CONTENT" 2>&1 || true)
@@ -117,3 +121,34 @@ psql_ -d "$DB" -f "$ROLLBACK" >/dev/null 2>&1 || fail "回復腳本失敗"
 psql_ -d "$DB" -f "$CONTENT" >/dev/null 2>&1 || fail "再套用失敗"
 [ "$(INTRO)" = "$C1" ] || fail "再套用後與第一次套用不同"
 echo "ok - 回復腳本還原到更新前（逐欄位相同）、再套用後與第一次相同"
+
+# 6. 複查 P2：套用後替第一則新增第 4 條線索 → 回復必須整筆中止，故事、全部線索（含第 4 條）與 intro_text 都不變
+q "update public.session_state set updated_at = now() - interval '3 hours' where session_id = '$SID'" >/dev/null
+q "insert into public.intro_clues (story_id, sort_order, kind, label, body) select id, 4, 'other', '第四條', '套用後新增的線索' from public.intro_stories where slug = 'intro-1'" >/dev/null
+ALL() { q "select md5((select string_agg(i::text, '|' order by i.slug) from public.intro_stories i) || (select string_agg(c::text, '|' order by c.story_id, c.sort_order) from public.intro_clues c)
+  || coalesce((select intro_text::text from public.content_sets where is_default), ''))"; }
+A0=$(ALL)
+OUT=$(psql_ -d "$DB" -f "$ROLLBACK" 2>&1 || true)
+echo "$OUT" | grep -q '線索不符' || fail "有第 4 條線索時回復沒有中止：$OUT"
+[ "$(ALL)" = "$A0" ] || fail "回復中止後資料被改動"
+[ "$(q "select count(*) from public.intro_clues c join public.intro_stories i on i.id = c.story_id where i.slug = 'intro-1'")" = "4" ] || fail "第 4 條線索不見了"
+[ "$(q "select title from public.intro_stories where slug = 'intro-1'")" = "名偵探柯南" ] || fail "故事被部分還原"
+echo "ok - 回復：第一則多一條線索時整筆中止（明確錯誤「線索不符」），兩則故事、全部線索（含第 4 條）與 intro_text 都與執行前相同"
+# 缺少與錯置也中止
+q "delete from public.intro_clues where sort_order = 4" >/dev/null
+q "update public.intro_clues set sort_order = 5 where sort_order = 2 and story_id = (select id from public.intro_stories where slug = 'intro-2')" >/dev/null
+A1=$(ALL)
+OUT=$(psql_ -d "$DB" -f "$ROLLBACK" 2>&1 || true)
+echo "$OUT" | grep -q '線索不符' && [ "$(ALL)" = "$A1" ] || fail "第二則線索錯置時回復沒有中止或資料被改動：$OUT"
+q "update public.intro_clues set sort_order = 2 where sort_order = 5" >/dev/null
+q "delete from public.intro_clues where sort_order = 3 and story_id = (select id from public.intro_stories where slug = 'intro-1')" >/dev/null
+A2=$(ALL)
+OUT=$(psql_ -d "$DB" -f "$ROLLBACK" 2>&1 || true)
+echo "$OUT" | grep -q '線索不符' && [ "$(ALL)" = "$A2" ] || fail "第一則缺少線索時回復沒有中止或資料被改動：$OUT"
+echo "ok - 回復：線索錯置（第二則 2→5）或缺少（第一則沒有第 3 條）也整筆中止，資料不變"
+# 正常結構仍可完整回復（第 3 條是刪除後重新建立的，id 不同，所以這裡比對內容、不比對 id）
+q "insert into public.intro_clues (story_id, sort_order, kind, label, body) select id, 3, 'other', 'x', 'x' from public.intro_stories where slug = 'intro-1'" >/dev/null
+psql_ -d "$DB" -f "$CONTENT" >/dev/null 2>&1 || fail "重新套用失敗"
+psql_ -d "$DB" -f "$ROLLBACK" >/dev/null 2>&1 || fail "正常結構的回復失敗"
+[ "$(CONTENT_ONLY)" = "$CB0" ] || fail "正常結構回復後與更新前不同"
+echo "ok - 回復：恢復正常結構（各三條）後可完整回復到更新前（逐欄位相同）"

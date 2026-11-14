@@ -121,20 +121,31 @@ export function introNext(stories, st, text) {
   }
   return null;   // bridge：接下來由「進入下一環節」前往 02
 }
+// 返回只會「收起」，不會新增已公布的故事（複查 P1）：
+//   * 比較／舊版交會畫面返回時，依 seen 中實際已公布、且仍存在的最後一則故事決定回到哪一則的揭曉頁；
+//     舊場次可能只公布了第一則就進入交會畫面（seen: [0]），此時回到第一則的揭曉頁，第二則保持未公布。
+//     沒有任何有效的已公布紀錄時，回到中性的開場畫面。
+//   * 從某一則的開頭返回前一則時，前一則只有在 seen 中才顯示為已公布；否則停在它的三條線索（未公布）。
+const validSeen = (stories, st) => (st.seen || []).filter((i) => Number.isInteger(i) && i >= 0 && i < stories.length);
 export function introBack(stories, st, text) {
   const T = introText(text);
   const n = (i) => (stories[i]?.clues || []).length;
+  const seen = validSeen(stories, st);
   if (st.view === 'bridge') return { ...st, view: 'compare', step: lastStep(T) };
   if (st.view === 'compare' || st.view === 'crossroads') {
     if ((st.step || 0) > 0 && st.view === 'compare') return { ...st, step: st.step - 1 };
-    const last = stories.length - 1;
-    return last < 0 ? { ...introInitial() } : { ...st, view: 'story', index: last, clues: n(last), revealed: true, seen: markSeen(st, last, true), step: 0 };
+    if (!seen.length) return { ...introInitial() };
+    const last = Math.max(...seen);
+    return { ...st, view: 'story', index: last, clues: n(last), revealed: true, seen, step: 0 };
   }
   if (st.view === 'story') {
-    if (st.revealed) return { ...st, revealed: false, seen: markSeen(st, st.index, false) };   // 收起作品圖與答案
+    if (st.revealed) return { ...st, revealed: false, seen: markSeen({ seen }, st.index, false) };   // 收起作品圖與答案
     if (st.clues > 0) return { ...st, clues: st.clues - 1 };
-    if (st.index > 0) return { ...st, index: st.index - 1, clues: n(st.index - 1), revealed: true, seen: markSeen(st, st.index - 1, true) };
-    return { ...st, view: 'open', clues: 0, revealed: false };
+    if (st.index > 0) {
+      const prev = st.index - 1;
+      return { ...st, index: prev, clues: n(prev), revealed: seen.includes(prev), seen };
+    }
+    return { ...st, view: 'open', clues: 0, revealed: false, seen };
   }
   return null;   // open：已在第一步
 }

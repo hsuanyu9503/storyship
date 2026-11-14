@@ -270,6 +270,7 @@ async function publish(phase, sub, projection, { lock = false } = {}) {
 
 async function goPhase(phase) {
   if (!phase) return;
+  if (Date.now() < (S.navHold || 0)) return;   // 剛由 01 轉場頁切換環節：同一次快速雙點的第二下不再切換
   // 共同的離開檢查放在各環節專屬邏輯之前（任何目的環節都一樣）。
   // 結束個人分類：從 03 以前前往 04 以後，先讓教師確認未完成人數（不會強制阻止；取消則完全不送出）
   if (S.state.phase <= '03' && phase >= '04' && S.personal.snapshots === 0 && !(await confirmEndPersonal())) return;
@@ -422,15 +423,34 @@ const ctl06 = () => {
   return { view: c.view, index: c.index ?? 0, revealed: [...(c.revealed || [])] };
 };
 
-// 01：一次只前進或後退一步。publish 期間（S.busy）再按會被忽略，所以觸控連點、鍵盤連按不會跳兩步。
-function intro(dir) {
-  if (S.busy) return;
+// 01：一次只前進或後退一步。
+//   * 主要按鈕、鍵盤與簡報筆共用 intro('next')：一般步驟前進一步；在最後的轉場頁才進入 02（複查 P2）。
+//   * publish 期間（S.busy）再按會被忽略。
+//   * 前進成功後有一小段冷卻（INTRO_HOLD_MS），期間的「下一步」會被忽略、主要按鈕暫時停用：
+//     伺服器回應很快時，同一次快速雙點的第二下會落在已經換成「進入神祕故事二」的按鈕上（複查風險 2）。
+//     上一步不受冷卻限制。轉場頁進入 02 後，環節切換同樣有冷卻（S.navHold），避免第二下落在 02 的按鈕上又切換一次。
+const INTRO_HOLD_MS = 700;
+const introHeld = () => Date.now() < (S.introHold || 0);
+async function intro(dir) {
+  if (S.busy || (dir === 'next' && introHeld())) return;
   const cur = ctl01();
   const next = (dir === 'back' ? P.introBack : P.introNext)(S.content.intro, cur, S.content.introText);
-  if (!next) return;
-  publish('01', P.introSub(next), P.introProjection(S.content.intro, next, S.content.introText));
+  if (!next) {
+    if (dir === 'next' && cur.view === 'bridge') {   // 01 最後一步：進入 02（與畫面上的主要按鈕相同）
+      S.introHold = Date.now() + INTRO_HOLD_MS;
+      await goPhase('02');
+      S.navHold = Date.now() + INTRO_HOLD_MS;
+    }
+    return;
+  }
+  const ok = await publish('01', P.introSub(next), P.introProjection(S.content.intro, next, S.content.introText));
+  if (ok && dir === 'next') {
+    S.introHold = Date.now() + INTRO_HOLD_MS;
+    if (S.state?.phase === '01') renderPanel();
+    setTimeout(() => { if (S.state?.phase === '01') renderPanel(); }, INTRO_HOLD_MS + 20);
+  }
 }
-// 鍵盤（含簡報筆）：→／PageDown＝下一步，←／PageUp＝上一步。只在 01、焦點不在輸入欄位、沒有對話框時有效。
+// 鍵盤（含簡報筆）：→／PageDown＝下一步，←／PageUp＝上一步。只在 01、焦點不在輸入欄位、沒有對話框時有效；按住不放（repeat）不算。
 document.addEventListener('keydown', (e) => {
   if (S.state?.phase !== '01' || e.altKey || e.ctrlKey || e.metaKey || e.repeat) return;
   if (e.target.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
@@ -475,9 +495,8 @@ const PANELS = {
       h('p.intro-now', '投影目前：', h('b', now)),
       h('div.intro-btns',
         h('button.intro-back', { type: 'button', onclick: () => intro('back'), disabled: !back }, '← 上一步'),
-        nextLabel
-          ? h('button.primary.big.intro-next', { type: 'button', onclick: () => intro('next') }, nextLabel + ' →')
-          : h('button.primary.big.intro-next', { type: 'button', onclick: () => goPhase('02') }, `進入下一環節：${phaseById('02').name} →`)),
+        h('button.primary.big.intro-next', { type: 'button', onclick: () => intro('next'), disabled: introHeld(), 'aria-disabled': introHeld() ? 'true' : null },
+          nextLabel ? nextLabel + ' →' : `進入下一環節：${phaseById('02').name} →`)),
       h('p.muted.small', '每按一次只前進一步；作品名稱、名字與作品圖只在按「公布作品」後投影。鍵盤或簡報筆：→／PageDown 下一步、←／PageUp 上一步。'),
       nextLabel ? h('div.row', h('button', { type: 'button', onclick: () => goPhase('02') }, `略過，直接進入下一環節：${phaseById('02').name} →`)) : null,
       h('h3', '教師預覽（含未公開內容，不會投影）'),
