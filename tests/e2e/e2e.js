@@ -185,23 +185,25 @@ async function inViewport(page, sel) {
 
     // ---------- 01 ----------
     await teacher.click('text=啟動第一環節：走進故事世界 →');
-    await waitText(proj, '故事世界的入口');
+    await waitText(proj, '有 2 個神祕的故事正在等待我們探索');   // 佔位資料沒有 intro_text：使用預設開場語
     for (const s of students) await waitText(s.page, '請觀看前方投影，跟著老師探索故事世界。');
     ok(true, '01：投影與學生端同步切換');
-    await teacher.click('text=開啟故事探索');
-    await waitText(proj, '這是什麼故事呢？');
-    await teacher.click('text=下一個線索 →');
+    await teacher.click('button:has-text("開始：神祕故事一")');
+    await waitText(proj, '線索 0 / 3');
+    await teacher.click('button:has-text("顯示下一條線索")');
     await waitText(proj, '背景線索');
     const pt = await text(proj);
     ok(!pt.includes('人物線索') && !pt.includes('神祕故事一（佔位名稱）'), '01：只公開第一個線索，故事名稱未揭曉');
     ok((await text(teacher)).includes('神祕故事一（佔位名稱）'), '01：教師端可預覽未公開的故事名稱');
-    await teacher.click('text=揭曉故事');
+    for (const w of ['人物線索', '情節線索']) { await teacher.click('button:has-text("顯示下一條線索")'); await waitText(proj, w); }
+    ok(!(await text(proj)).includes('神祕故事一（佔位名稱）'), '01：三條線索都出現後仍未公布');
+    await teacher.click('button:has-text("公布作品")');
     await waitText(proj, '神祕故事一（佔位名稱）');
-    ok(true, '01：揭曉故事後投影顯示名稱');
+    ok(true, '01：公布作品後投影顯示名稱');
     await proj.screenshot({ path: path.join(OUT, 'p01-reveal.png') });
 
     // ---------- 02 ----------
-    await teacher.click('button:has-text("進入下一環節 →")');
+    await teacher.click('button:has-text("直接進入下一環節")');
     await waitText(proj, '仔細觀察故事的共同特色');
     ok(!/奇幻|偵探|武俠|離奇事件與謎團|不同於現實的時空/.test(await text(proj)), '02：不提前顯示五種小說類型');
     await waitText(students[0].page, '進入探索模式');

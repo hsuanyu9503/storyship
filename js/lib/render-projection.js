@@ -31,6 +31,12 @@ export function genreSources(url) {
 
 // 圖片框的實作在 visual.js（故事卡共用）；這裡保留原本的匯出名稱
 export { visualBoxCount, retryVisuals } from './visual.js';
+// 01 揭曉圖：assets/intro/<作品>-1600.webp 另有 960 寬的版本；先量圖片框寬度再選擇（visual.js）
+export function introSources(url) {
+  const m = /^(assets\/intro\/[a-z0-9-]+)-1600\.webp$/.exec(url || '');
+  return m ? [{ url: `${m[1]}-960.webp`, w: 960 }, { url, w: 1600 }] : null;
+}
+const introVisual = (url, alt) => visualBox(url, alt, { slot: 'landscape', sources: introSources(url) });
 const genreVisualBox = (url, alt, slot) => visualBox(url, alt, { slot, sources: genreSources(url) });
 const genreAlt = (name) => `「${name}」類型情境插畫（觀察線索）`;
 // 常見特色前的標記：舊資料有圖示時沿用，否則用編號
@@ -64,33 +70,57 @@ const SCREENS = {
             h('div.st-group-name', g.name), h('div.st-group-count', g.count + ' 人'))))));
   },
 
+  // 01 走進故事世界。猜題階段（未公布）投影資料裡沒有作品名稱、名字與圖片，所以畫面上也不可能出現。
   intro: (p) => {
     if (p.view === 'open') {
       return h('div.st-center.st-intro-open',
-        media(null, '情境背景', 'st-bg'),
-        h('div.st-overlay', h('h1.st-title', '故事世界的入口'),
-          h('p.st-sub', `有 ${p.total || 0} 個神祕的故事正在等待我們探索`)));
+        h('h1.st-title.big', p.title || '走進故事世界'),
+        h('p.st-intro-opening', p.opening || `有 ${p.total || 0} 個神祕的故事正在等待我們探索`));
     }
-    if (p.view === 'crossroads') {
+    if (p.view === 'crossroads') {   // 舊版畫面（已公開的舊投影仍可顯示）
       return h('div.st-crossroads',
         h('h1.st-title', '故事世界的交會'),
         h('div.st-cross-row', (p.stories || []).map((s) =>
           h('div.st-cross-card', media(s.image_url, '故事代表圖片'), h('div.st-cross-title', s.title)))),
         h('p.st-prompt', '這些故事有什麼共同的特色？'));
     }
+    if (p.view === 'compare') {
+      return h('div.st-intro-compare',
+        h('h1.st-title', p.title),
+        h('div.st-ic-pairs', (p.stories || []).map((s) => h('div.st-ic-pair',
+          h('div.st-ic-img', introVisual(s.image_url, s.image_alt)),
+          h('div.st-ic-text', h('div.st-ic-title', `《${s.title}》`),
+            s.name_before ? h('div.st-names', h('span', s.name_before), h('span.st-arrow', { 'aria-label': '改名為' }, '→'), h('span', s.name_after)) : null)))),
+        h('div.st-ic-prompts', (p.prompts || []).map((q) => h('p.st-ic-prompt', q))));
+    }
+    if (p.view === 'bridge') {
+      return h('div.st-center.st-intro-bridge', h('h1.st-title.big', p.title), h('p.st-intro-opening', p.text));
+    }
     const s = p.story || {};
-    return h('div.st-story',
-      media(s.background_url, '情境背景', 'st-bg'),
-      h('div.st-story-head',
-        h('span.st-chip', `神祕故事 ${(s.index ?? 0) + 1} / ${s.total || 0}`),
-        h('span.st-chip.light', `線索 ${(s.clues || []).length} / ${s.clue_total || 0}`)),
-      h('div.st-clues', (s.clues || []).map((c) =>
-        h('div.st-clue', media(c.image_url, c.label || '線索插畫', 'st-clue-img'),
-          h('div.st-clue-label', c.label), h('div.st-clue-body', c.body)))),
-      s.title
-        ? h('div.st-reveal', media(s.image_url, '故事代表圖片', 'st-reveal-img'),
-            h('div', h('div.st-reveal-title', s.title), h('div.st-reveal-text', s.reveal_text || '')))
-        : h('div.st-guess', '這是什麼故事呢？'));
+    const shown = s.clues || [];
+    const total = s.clue_total || shown.length;
+    const head = h('div.st-story-head',
+      h('span.st-chip', s.neutral || `神祕故事 ${(s.index ?? 0) + 1}`),
+      h('span.st-chip.light', `線索 ${shown.length} / ${total}`));
+    if (s.title) {
+      // 公布：作品圖（固定 16:9 版位，載入前後版面不變）、作品名稱、名字變化、揭曉說明；下方保留三條線索供對照
+      return h('div.st-story.st-revealed', head,
+        h('div.st-reveal2',
+          h('div.st-reveal2-img', introVisual(s.image_url, s.image_alt || `《${s.title}》揭曉圖`)),
+          h('div.st-reveal2-text',
+            h('div.st-reveal2-title', `《${s.title}》`),
+            s.name_before ? h('div.st-names', h('span', s.name_before), h('span.st-arrow', { 'aria-label': '改名為' }, '→'), h('span', s.name_after)) : null,
+            h('p.st-reveal2-desc', s.reveal_text || ''))),
+        h('ol.st-clue-recap', shown.map((c) => h('li', h('b', `線索${c.no || ''}｜${c.label}`), h('span', c.body)))));
+    }
+    // 猜題：已顯示的線索保留；尚未顯示的位置留白（只有編號），線索出現時版面不跳動
+    return h('div.st-story.st-guessing', head,
+      h('ol.st-clue-list', Array.from({ length: total }, (_, k) => {
+        const c = shown[k];
+        return c
+          ? h('li.st-clue2', h('div.st-clue2-label', h('span.st-clue2-no', `線索${c.no || k + 1}`), c.label), h('div.st-clue2-body', c.body))
+          : h('li.st-clue2.pending', { 'aria-hidden': 'true' }, h('div.st-clue2-label', h('span.st-clue2-no', '線索' + '一二三四五六七八九十'[k])));
+      })));
   },
 
   task: (p) => h('div.st-center',

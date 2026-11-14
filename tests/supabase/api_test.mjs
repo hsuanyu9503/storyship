@@ -174,6 +174,12 @@ const scAnon = await s.from('story_cards').select('elements').limit(1);
 ok(Boolean(scAnon.error) && scAnon.error.code === '42501', '真實 PostgREST：匿名不能直接讀 story_cards（42501）');
 const scT = await t1.from('story_cards').select('slug, title, elements').order('sort_order');
 ok(!scT.error && scT.data.length >= 8 && scT.data[0].title === '神奇柑仔店' && scT.data[0].elements[0] === '神奇零食', '真實 PostgREST：教師讀得到故事元素');
+// 第 01 環節教材（run.sh 已套用 intro_materials_v1.sql）：答案只有教師讀得到；匿名不能直接讀
+const inT = await t1.from('intro_stories').select('slug, title, name_before, name_after, image_alt').order('sort_order');
+ok(!inT.error && inT.data.length === 2 && inT.data[0].name_after === '江戶川柯南' && inT.data[1].title === '神隱少女', '真實 PostgREST：教師讀得到 01 的作品、名字與替代文字');
+const inA = await s.from('intro_stories').select('title').limit(1);
+const inA2 = await s.from('intro_clues').select('body').limit(1);
+ok(Boolean(inA.error) && inA.error.code === '42501' && Boolean(inA2.error) && inA2.error.code === '42501', '真實 PostgREST：匿名不能直接讀 01 的探索故事與線索（42501）');
 
 // ---------- Realtime：收到變更通知；中斷時輪詢仍能取得正確狀態 ----------
 const rt = anon();

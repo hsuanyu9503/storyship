@@ -35,6 +35,9 @@ echo "ok - 小說類型教材腳本（以 postgres 角色、Supabase 預設權�
 psql_ -f "$ROOT/supabase/content/story_cards_v1.sql" > "$TMP/content" 2>&1 || { cat "$TMP/content"; fail "故事卡教材腳本失敗"; }
 [ "$(grep -c '|t$' "$TMP/content")" = "8" ] || { cat "$TMP/content"; fail "故事卡教材腳本結果不是 8 列 true"; }
 echo "ok - 故事卡教材腳本（以 postgres 角色、Supabase 預設權限）：八張更新完成"
+psql_ -f "$ROOT/supabase/content/intro_materials_v1.sql" > "$TMP/content" 2>&1 || { cat "$TMP/content"; fail "01 教材腳本失敗"; }
+[ "$(grep -c '|t$' "$TMP/content")" = "2" ] || { cat "$TMP/content"; fail "01 教材腳本結果不是 2 列 true"; }
+echo "ok - 01 教材腳本（以 postgres 角色、Supabase 預設權限）：兩則探索故事更新完成"
 for f in "$ROOT"/supabase/migrations/00{2,3}_*.sql; do psql_ -f "$f" >/dev/null 2>&1 || fail "重複執行失敗：$f"; done
 verify17 || fail "重複執行 002／003 後檢查未通過"
 echo "ok - 重複執行 002、003 後仍全數通過"

@@ -67,13 +67,15 @@ union all
 select '15. 小組操作鎖版本欄位存在', exists (select 1 from information_schema.columns
         where table_schema = 'public' and table_name = 'groups' and column_name = 'lock_rev')
 union all
-select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充、故事元素）',
+select '16. Phase 4 欄位存在（公開選擇、揭露紀錄、刪除結果、類型橫式圖、教師共同補充、故事元素、第一環節名字變化與文案）',
        (select count(*) from information_schema.columns where table_schema = 'public'
           and ((table_name = 'session_state' and column_name in ('stage_ctl', 'disclosure'))
             or (table_name = 'group_category_tombstones' and column_name = 'result')
             or (table_name = 'genres' and column_name = 'visual_landscape_url')
             or (table_name = 'content_sets' and column_name = 'genre_teacher_guide')
-            or (table_name = 'story_cards' and column_name = 'elements'))) = 6
+            or (table_name = 'story_cards' and column_name = 'elements')
+            or (table_name = 'intro_stories' and column_name in ('name_before', 'name_after', 'image_alt'))
+            or (table_name = 'content_sets' and column_name = 'intro_text'))) = 10
        and to_regprocedure('app.genre_visual(text,text,text)') is not null
        and not has_function_privilege('anon', 'app.genre_visual(text,text,text)', 'execute')
 union all

@@ -6,21 +6,53 @@ export function joinProjection() {
   return { screen: 'join' };
 }
 
-// 第一環節
-// intro: { view: 'open'|'story'|'crossroads', index, clues, revealed, seen: [已揭曉故事的 index] }
+// 第一環節「走進故事世界」：老師一步一步操作的猜作品活動。
+// intro: { view: 'open'|'story'|'compare'|'bridge'|'crossroads'(舊), index, clues, revealed, seen: [已公布故事的 index], step }
+//   open     開場：單元名稱與開場語（只有中性名稱「神祕故事一」，不含作品資訊）
+//   story    神祕故事：clues＝已顯示的線索數；revealed＝已公布作品（作品名稱、名字變化、揭曉圖與說明只在這之後放進投影）
+//   compare  兩個故事放在一起：step 0＝名字變化＋比較提問；step 1＝再加上命名提問
+//   bridge   轉場：接到第 02、03 環節的故事卡分類
+// 文案（text）來自 content_sets.intro_text（教師可讀，由教師端放進投影）；舊資料沒有時使用 INTRO_DEFAULT。
+const NUMS = '一二三四五六七八九十';
+export const introNo = (i) => NUMS[i] || String(i + 1);
+export const introNeutral = (i) => `神祕故事${introNo(i)}`;
+export const INTRO_DEFAULT = {
+  opening: null,   // null：顯示「有 N 個神祕的故事正在等待我們探索」
+  compare_title: '兩個故事放在一起',
+  compare_prompts: ['這些故事有什麼共同的特色？'],
+  naming_prompt: null,
+  bridge_title: null,
+  bridge_text: null,
+};
+export function introText(t) {
+  const x = t && typeof t === 'object' ? t : {};
+  const str = (v, d) => (typeof v === 'string' && v.trim() ? v : d);
+  return {
+    opening: str(x.opening, INTRO_DEFAULT.opening),
+    compare_title: str(x.compare_title, INTRO_DEFAULT.compare_title),
+    compare_prompts: Array.isArray(x.compare_prompts) && x.compare_prompts.some((v) => typeof v === 'string' && v.trim())
+      ? x.compare_prompts.filter((v) => typeof v === 'string' && v.trim()) : INTRO_DEFAULT.compare_prompts,
+    naming_prompt: str(x.naming_prompt, INTRO_DEFAULT.naming_prompt),
+    bridge_title: str(x.bridge_title, INTRO_DEFAULT.bridge_title),
+    bridge_text: str(x.bridge_text, INTRO_DEFAULT.bridge_text),
+  };
+}
 export function introInitial() {
-  return { view: 'open', index: 0, clues: 0, revealed: false, seen: [] };
+  return { view: 'open', index: 0, clues: 0, revealed: false, seen: [], step: 0 };
 }
 
 export function introSub(intro) {
   if (intro.view === 'open') return '01-01';
-  if (intro.view === 'crossroads') return '01-04';
+  if (intro.view === 'crossroads' || intro.view === 'compare') return '01-04';
+  if (intro.view === 'bridge') return '01-05';
   return intro.revealed ? '01-03' : '01-02';
 }
 
-export function introProjection(stories, intro) {
+const namesOf = (s) => (s.name_before && s.name_after ? { name_before: s.name_before, name_after: s.name_after } : {});
+export function introProjection(stories, intro, text) {
+  const T = introText(text);
   const base = { screen: 'intro', ctl: { ...intro, seen: [...(intro.seen || [])] } };
-  if (intro.view === 'open') return { ...base, view: 'open', total: stories.length };
+  if (intro.view === 'open') return { ...base, view: 'open', total: stories.length, title: '走進故事世界', opening: T.opening };
   if (intro.view === 'crossroads') {
     return {
       ...base,
@@ -30,14 +62,25 @@ export function introProjection(stories, intro) {
         .map((i) => ({ title: stories[i].title, image_url: stories[i].image_url || null })),
     };
   }
+  if (intro.view === 'compare') {
+    // 只放已公布的故事（正常流程走到這裡時全部都已公布）
+    const shown = (intro.seen || []).filter((i) => stories[i]);
+    const prompts = [...T.compare_prompts];
+    if ((intro.step || 0) >= 1 && T.naming_prompt) prompts.push(T.naming_prompt);
+    return { ...base, view: 'compare', title: T.compare_title, prompts,
+      stories: shown.map((i) => ({ title: stories[i].title, image_url: stories[i].image_url || null,
+        image_alt: stories[i].image_alt || `《${stories[i].title}》揭曉圖`, ...namesOf(stories[i]) })) };
+  }
+  if (intro.view === 'bridge') return { ...base, view: 'bridge', title: T.bridge_title || TEXT.activity, text: T.bridge_text || TEXT.task };
   const s = stories[intro.index];
-  if (!s) return { ...base, view: 'open', total: stories.length };
-  const clues = (s.clues || []).slice(0, Math.max(0, intro.clues)).map((c) => ({
-    kind: c.kind, label: c.label, body: c.body, image_url: c.image_url || null,
+  if (!s) return { ...base, view: 'open', total: stories.length, title: '走進故事世界', opening: T.opening };
+  const clues = (s.clues || []).slice(0, Math.max(0, intro.clues)).map((c, k) => ({
+    no: introNo(k), kind: c.kind, label: c.label, body: c.body, image_url: c.image_url || null,
   }));
   const story = {
     index: intro.index,
     total: stories.length,
+    neutral: introNeutral(intro.index),
     clue_total: (s.clues || []).length,
     background_url: s.background_url || null,
     clues,
@@ -46,11 +89,73 @@ export function introProjection(stories, intro) {
     story.title = s.title;
     story.reveal_text = s.reveal_text;
     story.image_url = s.image_url || null;
+    story.image_alt = s.image_alt || `《${s.title}》揭曉圖`;
+    Object.assign(story, namesOf(s));
   }
   return { ...base, view: 'story', story };
 }
 
-// 教師端操作（回傳新的 intro 狀態，不修改原物件）
+// 教師端：一次只前進／後退一步（純函式，不修改原物件）。到了最後一步 next 回傳 null。
+const lastStep = (T) => (T.naming_prompt ? 1 : 0);
+const markSeen = (st, i, on) => {
+  const set = new Set(st.seen || []);
+  if (on) set.add(i); else set.delete(i);
+  return [...set].sort((a, b) => a - b);
+};
+export function introNext(stories, st, text) {
+  const T = introText(text);
+  const n = (i) => (stories[i]?.clues || []).length;
+  if (st.view === 'open') {
+    return stories.length ? { ...st, view: 'story', index: 0, clues: 0, revealed: false, step: 0 } : null;
+  }
+  if (st.view === 'story') {
+    if (st.clues < n(st.index)) return { ...st, clues: st.clues + 1 };
+    if (!st.revealed) return { ...st, revealed: true, clues: n(st.index), seen: markSeen(st, st.index, true) };
+    if (st.index + 1 < stories.length) return { ...st, index: st.index + 1, clues: 0, revealed: false };
+    return { ...st, view: 'compare', step: 0 };
+  }
+  if (st.view === 'compare' || st.view === 'crossroads') {
+    const step = st.view === 'compare' ? st.step || 0 : -1;
+    if (step < lastStep(T)) return { ...st, view: 'compare', step: step + 1 };
+    return { ...st, view: 'bridge' };
+  }
+  return null;   // bridge：接下來由「進入下一環節」前往 02
+}
+export function introBack(stories, st, text) {
+  const T = introText(text);
+  const n = (i) => (stories[i]?.clues || []).length;
+  if (st.view === 'bridge') return { ...st, view: 'compare', step: lastStep(T) };
+  if (st.view === 'compare' || st.view === 'crossroads') {
+    if ((st.step || 0) > 0 && st.view === 'compare') return { ...st, step: st.step - 1 };
+    const last = stories.length - 1;
+    return last < 0 ? { ...introInitial() } : { ...st, view: 'story', index: last, clues: n(last), revealed: true, seen: markSeen(st, last, true), step: 0 };
+  }
+  if (st.view === 'story') {
+    if (st.revealed) return { ...st, revealed: false, seen: markSeen(st, st.index, false) };   // 收起作品圖與答案
+    if (st.clues > 0) return { ...st, clues: st.clues - 1 };
+    if (st.index > 0) return { ...st, index: st.index - 1, clues: n(st.index - 1), revealed: true, seen: markSeen(st, st.index - 1, true) };
+    return { ...st, view: 'open', clues: 0, revealed: false };
+  }
+  return null;   // open：已在第一步
+}
+// 主要按鈕的文字（教師端）：下一步會做什麼
+export function introNextLabel(stories, st, text) {
+  const n = (i) => (stories[i]?.clues || []).length;
+  if (st.view === 'open') return '開始：' + introNeutral(0);
+  if (st.view === 'story') {
+    if (st.clues < n(st.index)) return '顯示下一條線索';
+    if (!st.revealed) return '公布作品';
+    if (st.index + 1 < stories.length) return '進入' + introNeutral(st.index + 1);
+    return introText(text).compare_title;
+  }
+  if (st.view === 'compare' || st.view === 'crossroads') {
+    const T = introText(text);
+    return (st.view === 'compare' ? st.step || 0 : -1) < lastStep(T) ? '下一個提問' : (T.bridge_title || '轉場：準備分類');
+  }
+  return null;
+}
+
+// 舊版教師端操作（保留給舊的投影狀態與既有測試；新的教師端只使用 introNext／introBack）
 export const introOps = {
   start: (stories, st) => ({ ...st, view: 'story', index: 0, clues: 0, revealed: false }),
   nextClue: (stories, st) => {
@@ -165,7 +270,7 @@ export function defaultProjection(phaseId, content) {
     case '00': return { sub: '00', projection: joinProjection() };
     case '01': {
       const st = introInitial();
-      return { sub: introSub(st), projection: introProjection(content.intro || [], st) };
+      return { sub: introSub(st), projection: introProjection(content.intro || [], st, content.introText) };
     }
     case '02': return { sub: '02', projection: taskProjection() };
     case '03':

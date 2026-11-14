@@ -77,6 +77,10 @@ button.small, select.small, .small { font-size: .85em; padding: .25em .5em; }
 .qr-box { width: 220px; height: 220px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; }
 .qr-box img { width: 100%; }
 .intro-preview { display: grid; gap: .6rem; }
+.intro-now { font-size: 1.05rem; margin: 0 0 .6rem; }
+.intro-btns { display: flex; gap: .6rem; flex-wrap: wrap; align-items: stretch; }
+.intro-btns .intro-next { flex: 1 1 260px; font-size: 1.25rem; min-height: 56px; }
+.intro-btns .intro-back { flex: 0 0 auto; min-height: 56px; }
 .intro-story { border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; }
 .intro-story.current { border-color: var(--accent); background: var(--accent-soft); }
 .intro-story ol { margin: .4rem 0 0; padding-left: 1.2rem; }
@@ -155,6 +159,58 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
 .st-reveal { display: flex; gap: 2cqw; align-items: center; background: #fff; border-radius: 1.2cqw; padding: 1.5cqw; }
 .st-reveal-img { width: 14cqw; height: 9cqw; flex: none; }
 .st-reveal-title { font-size: 3.6cqw; font-weight: 800; } .st-reveal-text { font-size: 1.9cqw; }
+/* 01 走進故事世界（投影）：線索是猜題的視覺重點，字級以後排可讀為準；版位固定，線索與作品圖出現時不推動其他內容 */
+.st-intro-open .st-title.big, .st-intro-bridge .st-title.big { font-size: 6.4cqw; letter-spacing: .3cqw; }
+.st-intro-opening { font-size: 3.4cqw; line-height: 1.6; margin: 0; max-width: 78cqw; font-weight: 600; color: #22312b; }
+.st-story.st-guessing, .st-story.st-revealed { padding: 2.6cqw 4cqw 3cqw; gap: 1.6cqw; }
+.st-story .st-chip { font-size: 2cqw; padding: .35cqw 1.4cqw; }
+.st-clue-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-rows: repeat(3, minmax(0, 1fr)); gap: 1.3cqw; flex: 1 1 auto; min-height: 0; }
+.st-clue2 { background: #fff; border: .2cqw solid #cfd8d2; border-radius: 1.2cqw; padding: 1.1cqw 1.8cqw; display: flex; flex-direction: column; justify-content: center; gap: .5cqw; min-height: 0; }
+.st-clue2.pending { background: transparent; border-style: dashed; border-color: #c9d1cc; }
+.st-clue2.pending .st-clue2-no { background: #e3e8e4; color: #6b7a72; }
+.st-clue2-label { font-size: 2.2cqw; font-weight: 800; color: #1f5a46; display: flex; align-items: center; gap: 1cqw; }
+.st-clue2-no { font-size: 1.8cqw; background: #1f5a46; color: #fff; border-radius: 99px; padding: .15cqw 1.1cqw; font-weight: 700; flex: none; }
+.st-clue2-body { font-size: 2.9cqw; line-height: 1.45; color: #17231e; font-weight: 600; overflow-wrap: anywhere; }
+.st-reveal2 { display: grid; grid-template-columns: 48cqw minmax(0, 1fr); gap: 3cqw; align-items: center; }
+.st-reveal2-img > .st-visual { width: 100%; border-radius: 1.2cqw; }
+.st-reveal2-img .st-visual img, .st-ic-img .st-visual img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.st-reveal2-text { display: flex; flex-direction: column; gap: 1.4cqw; min-width: 0; }
+.st-reveal2-title { font-size: 3.8cqw; font-weight: 800; color: #17231e; }
+.st-names { display: flex; flex-wrap: wrap; align-items: center; gap: .6cqw 1.2cqw; font-size: 3.2cqw; font-weight: 800; color: #1f5a46; }
+.st-arrow { color: #b0702a; }
+.st-reveal2-desc { font-size: 2.3cqw; line-height: 1.55; margin: 0; color: #22312b; }
+.st-clue-recap { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.2cqw; }
+.st-clue-recap li { background: #fff; border: .15cqw solid #d6ddd8; border-radius: 1cqw; padding: .9cqw 1.2cqw; display: flex; flex-direction: column; gap: .4cqw; font-size: 1.55cqw; line-height: 1.4; }
+.st-clue-recap b { color: #1f5a46; }
+.st-intro-compare { display: flex; flex-direction: column; gap: 2cqw; padding: 3cqw 5cqw; justify-content: center; }
+.st-ic-pairs { display: grid; grid-template-columns: 1fr 1fr; gap: 3cqw; }
+.st-ic-pair { display: grid; grid-template-columns: 19cqw minmax(0, 1fr); gap: 1.6cqw; align-items: center; background: #fff; border: .15cqw solid #d6ddd8; border-radius: 1.2cqw; padding: 1.2cqw; }
+.st-ic-text { display: flex; flex-direction: column; gap: .6cqw; min-width: 0; }
+.st-ic-img > .st-visual { width: 100%; border-radius: 1cqw; }
+.st-ic-title { font-size: 2.6cqw; font-weight: 800; }
+.st-ic-pair .st-names { font-size: 2.6cqw; }
+.st-ic-prompts { display: flex; flex-direction: column; gap: 1cqw; }
+.st-ic-prompt { font-size: 2.6cqw; line-height: 1.5; font-weight: 700; margin: 0; background: #fff; border-left: .6cqw solid #b0702a; border-radius: .8cqw; padding: 1cqw 1.8cqw; }
+/* 投影頁在直向或窄視窗（例如手機、直向平板）：01 不再固定 16:9，改為依內容延伸、可捲動，字級有下限 */
+@media (max-aspect-ratio: 1/1) {
+  .stage-wrap:has(.stage[data-screen="intro"]) { height: auto; min-height: 100vh; display: block; }
+  .stage-wrap .stage[data-screen="intro"] { width: 100vw; aspect-ratio: auto; min-height: 100vh; overflow: visible; }
+  .stage-wrap .stage[data-screen="intro"] > * { position: relative; inset: auto; min-height: 100vh; }
+  .stage-wrap .stage[data-screen="intro"] .st-intro-opening { font-size: max(3.4cqw, 20px); }
+  .stage-wrap .stage[data-screen="intro"] .st-title { font-size: max(4.6cqw, 26px); }
+  .stage-wrap .stage[data-screen="intro"] .st-chip { font-size: max(2cqw, 14px); }
+  .stage-wrap .stage[data-screen="intro"] .st-clue-list { grid-template-rows: none; }
+  .stage-wrap .stage[data-screen="intro"] .st-clue2-label { font-size: max(2.2cqw, 16px); }
+  .stage-wrap .stage[data-screen="intro"] .st-clue2-no { font-size: max(1.8cqw, 13px); }
+  .stage-wrap .stage[data-screen="intro"] .st-clue2-body { font-size: max(2.9cqw, 20px); }
+  .stage-wrap .stage[data-screen="intro"] .st-reveal2, .stage-wrap .stage[data-screen="intro"] .st-ic-pairs { grid-template-columns: 1fr; }
+  .stage-wrap .stage[data-screen="intro"] .st-reveal2-title { font-size: max(3.8cqw, 24px); }
+  .stage-wrap .stage[data-screen="intro"] .st-names, .stage-wrap .stage[data-screen="intro"] .st-ic-title { font-size: max(3.2cqw, 20px); }
+  .stage-wrap .stage[data-screen="intro"] .st-reveal2-desc, .stage-wrap .stage[data-screen="intro"] .st-ic-prompt { font-size: max(2.3cqw, 18px); }
+  .stage-wrap .stage[data-screen="intro"] .st-clue-recap { grid-template-columns: 1fr; }
+  .stage-wrap .stage[data-screen="intro"] .st-clue-recap li { font-size: max(1.55cqw, 15px); }
+  .stage-wrap .stage[data-screen="intro"] .st-visual-alt { font-size: max(1.7cqw, 14px); }
+}
 .st-crossroads { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.5cqw; padding: 4cqw; }
 .st-cross-row { display: flex; gap: 3cqw; }
 .st-cross-card { width: 26cqw; display: flex; flex-direction: column; gap: 1cqw; }

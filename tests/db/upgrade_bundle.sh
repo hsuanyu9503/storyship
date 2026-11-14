@@ -234,3 +234,24 @@ psql_ -d $DB7 -f "$TMP/cards.sql" >/dev/null 2>&1 || fail "升級後套用故事
 [ "$(psql_ -d $DB7 -c "set role anon" -c "select (public.student_cards('$SID', '$TA7') -> 0 ->> 'title')" | tail -1)" = "神奇柑仔店" ] || fail "套用後學生讀到的不是正式故事"
 [ "$(psql_ -d $DB7 -c "set role anon" -c "select public.student_group_board('$SID', '$TA7')::text" | tail -1 | grep -c "$CA7")" = "1" ] || fail "套用後小組分類中的故事 id 不見了"
 echo "ok - 套用故事卡教材：同一場次的個人分類、快照與小組分類（以故事 id 記錄）完全不變，學生讀到正式名稱"
+
+# 10. 第 01 環節教材：已部署的 main（2d04917，含故事卡教材）＋停在 01（已公開第 2 條線索）的場次 → 新 upgrade.sql → 01 教材腳本
+DB8=story_friends_bundle_intro
+mkdb $DB8 2d04917
+for f in genre_materials_v1 story_cards_v1; do git -C "$ROOT" show "2d04917:supabase/content/$f.sql" > "$TMP/$f-2d0.sql"; chmod 644 "$TMP/$f-2d0.sql"; psql_ -d $DB8 -f "$TMP/$f-2d0.sql" >/dev/null 2>&1 || fail "2d04917 的 $f"; done
+psql_ -d $DB8 -c "insert into auth.users (id, email) values ('$T1', 't1@example.com'); insert into public.teachers values ('$T1', 't1@example.com');" >/dev/null
+SID=$(psql_ -d $DB8 -c "$TEACH" -c "select public.teacher_create_session('intro', 2)->>'session_id'" | tail -1)
+psql_ -d $DB8 -c "$TEACH" -c "select public.teacher_set_stage('$SID', '01', '01-02', '{\"screen\":\"intro\",\"view\":\"story\",\"story\":{\"index\":0,\"clues\":[{\"label\":\"背景線索\"}]}}', (select rev from public.session_state where session_id = '$SID'), true)" >/dev/null
+S8() { psql_ -d $DB8 -c "select md5(projection::text || phase || sub || rev) from public.session_state where session_id = '$SID'"; }
+I8() { psql_ -d $DB8 -c "select md5(string_agg(i.id || i.title || i.reveal_text, '|' order by i.slug)) from public.intro_stories i"; }
+SB8=$(S8); IB8=$(I8)
+psql_ -d $DB8 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 2d04917 升級失敗"
+verify_ok $DB8 || { psql_ -d $DB8 -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
+[ "$(S8)" = "$SB8" ] && [ "$(I8)" = "$IB8" ] || fail "升級本身改動了場次或探索故事"
+echo "ok - 從已部署的 main（2d04917）＋停在 01 的場次升級：第一環節新欄位就緒、17 項全過；場次與探索故事不變"
+cp "$ROOT/supabase/content/intro_materials_v1.sql" "$TMP/intro.sql"; chmod 644 "$TMP/intro.sql"
+psql_ -d $DB8 -c "update public.session_state set updated_at = now() - interval '3 hours'" >/dev/null
+psql_ -d $DB8 -f "$TMP/intro.sql" >/dev/null 2>&1 || fail "升級後套用 01 教材失敗"
+[ "$(S8)" = "$SB8" ] || fail "01 教材腳本改動了場次（已公開的投影應保留到教師再次操作）"
+[ "$(psql_ -d $DB8 -c "select string_agg(title, ',' order by sort_order) from public.intro_stories")" = "名偵探柯南,神隱少女" ] || fail "01 教材沒有套用"
+echo "ok - 套用 01 教材：場次狀態與已公開的投影不變，探索故事換成正式教材"

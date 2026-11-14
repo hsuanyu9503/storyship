@@ -175,6 +175,7 @@ async function loadContent(setId) {
     intro: (intro.data || []).map((s) => ({ ...s, clues: (s.intro_clues || []).sort((a, b) => a.sort_order - b.sort_order) })),
     genres: genres.data || [],
     genreGuide: set.data?.genre_teacher_guide || null,
+    introText: set.data?.intro_text || null,   // 第 01 環節文案（舊資料庫沒有此欄位時為 null，使用預設文字）
   };
 }
 
@@ -421,10 +422,21 @@ const ctl06 = () => {
   return { view: c.view, index: c.index ?? 0, revealed: [...(c.revealed || [])] };
 };
 
-function intro(op) {
-  const next = P.introOps[op](S.content.intro, ctl01());
-  publish('01', P.introSub(next), P.introProjection(S.content.intro, next));
+// 01：一次只前進或後退一步。publish 期間（S.busy）再按會被忽略，所以觸控連點、鍵盤連按不會跳兩步。
+function intro(dir) {
+  if (S.busy) return;
+  const cur = ctl01();
+  const next = (dir === 'back' ? P.introBack : P.introNext)(S.content.intro, cur, S.content.introText);
+  if (!next) return;
+  publish('01', P.introSub(next), P.introProjection(S.content.intro, next, S.content.introText));
 }
+// 鍵盤（含簡報筆）：→／PageDown＝下一步，←／PageUp＝上一步。只在 01、焦點不在輸入欄位、沒有對話框時有效。
+document.addEventListener('keydown', (e) => {
+  if (S.state?.phase !== '01' || e.altKey || e.ctrlKey || e.metaKey || e.repeat) return;
+  if (e.target.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
+  if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); intro('next'); }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); intro('back'); }
+});
 function genre(op, arg) {
   const next = P.genreOps[op](S.content.genres, ctl06(), arg);
   publish('06', P.genreSub(next), P.genreProjection(S.content.genres, next));
@@ -452,24 +464,34 @@ const PANELS = {
   '01': () => {
     const c = ctl01();
     const stories = S.content.intro;
-    const s = stories[c.index];
-    return h('div',
-      h('div.btn-grid',
-        h('button', { onclick: () => intro('start') }, '開啟故事探索'),
-        h('button', { onclick: () => intro('prevClue'), disabled: c.view !== 'story' || c.clues === 0 }, '← 上一個線索'),
-        h('button.primary', { onclick: () => intro('nextClue'), disabled: c.view !== 'story' || !s || c.clues >= s.clues.length }, '下一個線索 →'),
-        h('button.primary', { onclick: () => intro('reveal'), disabled: c.view !== 'story' || c.revealed }, '揭曉故事'),
-        h('button', { onclick: () => intro('prevStory'), disabled: c.view !== 'story' || c.index === 0 }, '← 上一個故事'),
-        h('button', { onclick: () => intro('nextStory'), disabled: c.view !== 'story' || c.index >= stories.length - 1 }, '下一個故事 →'),
-        h('button', { onclick: () => intro('crossroads'), disabled: (c.seen || []).length === 0 }, '顯示故事交會畫面'),
-        h('button.primary', { onclick: () => goPhase('02') }, '進入下一環節 →')),
+    const T = P.introText(S.content.introText);
+    const nextLabel = P.introNextLabel(stories, c, S.content.introText);
+    const back = P.introBack(stories, c, S.content.introText);
+    const now = c.view === 'open' ? '開場（單元名稱與開場語）'
+      : c.view === 'story' ? `${P.introNeutral(c.index)}：${c.revealed ? '已公布作品' : `已顯示 ${c.clues} / ${stories[c.index]?.clues.length || 0} 條線索`}`
+      : c.view === 'compare' ? `${T.compare_title}（提問 ${(c.step || 0) + 1}）`
+      : c.view === 'bridge' ? (T.bridge_title || '轉場') : '故事交會（舊畫面）';
+    return h('div.intro-ctl',
+      h('p.intro-now', '投影目前：', h('b', now)),
+      h('div.intro-btns',
+        h('button.intro-back', { type: 'button', onclick: () => intro('back'), disabled: !back }, '← 上一步'),
+        nextLabel
+          ? h('button.primary.big.intro-next', { type: 'button', onclick: () => intro('next') }, nextLabel + ' →')
+          : h('button.primary.big.intro-next', { type: 'button', onclick: () => goPhase('02') }, `進入下一環節：${phaseById('02').name} →`)),
+      h('p.muted.small', '每按一次只前進一步；作品名稱、名字與作品圖只在按「公布作品」後投影。鍵盤或簡報筆：→／PageDown 下一步、←／PageUp 上一步。'),
+      nextLabel ? h('div.row', h('button', { type: 'button', onclick: () => goPhase('02') }, `略過，直接進入下一環節：${phaseById('02').name} →`)) : null,
       h('h3', '教師預覽（含未公開內容，不會投影）'),
-      h('div.intro-preview', stories.map((st, i) => h('div.intro-story' + (i === c.index && c.view === 'story' ? '.current' : ''),
-        h('div.intro-title', `故事 ${i + 1}：`, h('b', st.title),
-          (c.seen || []).includes(i) ? h('span.tag.pub', '已揭曉') : h('span.tag', '未揭曉')),
-        h('ol', st.clues.map((cl, j) => h('li',
-          (i === c.index && c.view === 'story' && j < c.clues) || (c.seen || []).includes(i) ? h('span.tag.pub', '已公開') : h('span.tag', '未公開'),
-          ` ${cl.label}：${cl.body}`)))))));
+      h('div.intro-preview', stories.map((st, i) => {
+        const here = i === c.index && c.view === 'story';
+        const seen = (c.seen || []).includes(i);
+        return h('div.intro-story' + (here ? '.current' : ''),
+          h('div.intro-title', `${P.introNeutral(i)}：`, h('b', `《${st.title}》`),
+            st.name_before && st.name_after ? h('span', `　${st.name_before} → ${st.name_after}`) : null,
+            seen ? h('span.tag.pub', '已公布') : h('span.tag', '未公布')),
+          h('ol', st.clues.map((cl, j) => h('li',
+            (here && j < c.clues) || seen ? h('span.tag.pub', '已顯示') : h('span.tag', '未顯示'),
+            ` ${cl.label}：${cl.body}`))));
+      })));
   },
 
   '02': () => {

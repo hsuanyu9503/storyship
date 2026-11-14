@@ -40,6 +40,15 @@ alter table public.session_state add column if not exists disclosure jsonb not n
 alter table public.genres add column if not exists visual_landscape_url text;
 alter table public.content_sets add column if not exists genre_teacher_guide jsonb;
 
+-- 第一環節正式教材（2026-11）：揭曉時的名字變化、揭曉圖替代文字、單元共用文案（可重複執行；舊資料為 null，畫面使用原本的預設文字）
+--   intro_stories.name_before／name_after：例如「工藤新一」→「江戶川柯南」（只在教師按「公布作品」後放進投影）
+--   intro_stories.image_alt：揭曉圖的替代文字（公布後才出現）
+--   content_sets.intro_text：{"opening","compare_prompts":[..],"naming_prompt","bridge_title","bridge_text"}（只有教師可讀；由教師端放進投影）
+alter table public.intro_stories add column if not exists name_before text;
+alter table public.intro_stories add column if not exists name_after text;
+alter table public.intro_stories add column if not exists image_alt text;
+alter table public.content_sets add column if not exists intro_text jsonb;
+
 -- 故事卡正式教材（2026-11）：「值得留意的故事元素」（可重複執行；舊資料為空陣列，背面不顯示元素區）
 --   story_cards.elements：字串陣列，依文件順序，例如 ["神奇零食","實現願望"]；只是閱讀提示，不代表分類答案
 alter table public.story_cards add column if not exists elements jsonb not null default '[]'::jsonb;

@@ -11,6 +11,7 @@ psql_ -d postgres -c "create database $DB" >/dev/null
 cat "$ROOT/tests/db/supabase_stub.sql" "$ROOT"/supabase/migrations/00{1,2,3}_*.sql "$ROOT/supabase/seed/001_placeholder_content.sql" | psql_ -d "$DB" >/dev/null
 cat "$ROOT/supabase/content/genre_materials_v1.sql" | psql_ -d "$DB" >/dev/null
 cat "$ROOT/supabase/content/story_cards_v1.sql" | psql_ -d "$DB" >/dev/null
+cat "$ROOT/supabase/content/intro_materials_v1.sql" | psql_ -d "$DB" >/dev/null
 psql_ -d "$DB" -c "insert into auth.users (id, email) values ('11111111-1111-1111-1111-111111111111', 't1@example.com');
   insert into public.teachers values ('11111111-1111-1111-1111-111111111111', 't1@example.com');" >/dev/null
 echo "$DB ready"
