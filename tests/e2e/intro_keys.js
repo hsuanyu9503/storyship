@@ -86,7 +86,9 @@ async function until(fn, ms = 10000) { const t = Date.now() + ms; while (Date.no
       await until(async () => (await label()) !== '', 2000);
       await sleep(750);
     }
-    const box = await nextBtn.boundingBox();
+    await sleep(800);   // 前一步的冷卻結束、面板重畫完成後再量按鈕位置（重畫中元素會被替換，boundingBox 可能暫時為 null）
+    let box = null;
+    await until(async () => (box = await nextBtn.boundingBox()) !== null, 5000);
     const x = box.x + box.width / 2; const y = box.y + box.height / 2;
     const r0 = Number((await state(SID)).rev);
     const t0 = Date.now();
@@ -105,7 +107,7 @@ async function until(fn, ms = 10000) { const t = Date.now() + ms; while (Date.no
       `快速雙點情境成立：第一下完成並刷新用了 ${refreshMs}ms，第二下在第一下之後 ${secondAt}ms 送出（雙點間隔上限 ${DOUBLE_MS}ms）`);
     ok(Number(st.rev) === r0 + 1 && v.view === 'story' && v.index === 0 && v.revealed === true,
       `快速雙點只公布一次、停在柯南的揭曉頁（版本 ${r0} → ${st.rev}；index ${v.index}、revealed ${v.revealed}）`);
-    ok(await P.evaluate(() => document.body.innerText.includes('《名偵探柯南》')), '快速雙點後投影仍是《名偵探柯南》揭曉頁');
+    ok(await until(() => P.evaluate(() => document.body.innerText.includes('《名偵探柯南》') && !document.body.innerText.includes('神祕故事二')), 10000), '快速雙點後投影仍是《名偵探柯南》揭曉頁（等投影端輪詢更新，最多 10 秒）');
     // 之後的有意操作仍可前進
     await sleep(800);
     const r2 = Number((await state(SID)).rev);

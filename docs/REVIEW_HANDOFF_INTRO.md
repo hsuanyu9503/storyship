@@ -114,3 +114,51 @@ BASE=http://localhost:8789 DATABASE_URL=postgres://postgres:<密碼>@127.0.0.1/s
 2. 部署後確認：`docs/intro-source.json`、`source-assets/intro/` 的 Word 原稿、`docs/screenshots/intro/03-reveal-conan.webp` 皆回傳 404；
    `assets/intro/conan-1600.webp`、`assets/intro/chihiro-1600.webp` 可以載入。
 3. repo 本身是公開的：`docs/`、`source-assets/` 仍可在 github.com 讀到，是否處理由使用者決定。
+
+---
+
+# 第三輪複查修正：比較頁「上一步」的返回順序（基準 `1ed1a7a343cae6753f51c03b68f31c1fbcbede12`）
+
+開始時核對：`HEAD`＝`origin/claude/epic-franklin-c9v5yl`＝`1ed1a7a`，沒有後續提交。改動只限比較頁的返回行為與測試；文案、圖片、資料庫結構、防連點行為不變。
+修正提交：`85b4e94`（程式與測試）、本段文件所在的提交（測試等待調整與文件）。修正後 head 見交付訊息。
+
+## 修正
+
+* `js/lib/projection.js:146-153`（`introBack` 的比較／交會分支）：回到「進入比較頁之前剛揭曉的那一則」。
+  `introNext` 由揭曉頁進入比較時本來就保留 `index`（剛揭曉的故事），比較 → 命名 → 轉場也都保留；返回時只要 `index` 是整數且在 `seen` 中就用它。
+  `index` 缺失、越界或指向未公布的作品（例如舊版交會狀態）時，才沿用原本的安全規則（`seen` 中編號最大的一則，一定已公布）。
+  `seen` 只用來判斷哪些作品已公布，不再用排序推算公布先後。返回不新增 `seen`；沒有有效紀錄回到開場；比較題仍只在兩部都公布後送出。
+
+## 已修正並驗證（本輪實際執行，2026-11-14，本機隔離環境）
+
+| 案例 | 修正前（`1ed1a7a`） | 修正後 |
+|---|---|---|
+| 1 舊場次反向公布（crossroads、seen=[1] → 補猜並公布柯南 → 比較 → 上一步 ×2） | 單元測試失敗：返回千尋。瀏覽器 `intro_legacy.js` 3 項失敗（投影資料與畫面是千尋揭曉頁） | 上一步 → 柯南揭曉頁（投影資料與畫面）；再上一步 → 柯南三條線索、收起柯南，`seen=[1]`；教師端按鈕依序為「兩個故事放在一起」「公布作品」 |
+| 2 一般新場次（柯南 → 千尋 → 比較） | 通過（行為本來正確） | 通過：上一步 → 千尋揭曉；再上一步 → 千尋三條線索、`seen=[0]`（教師端操作、投影端驗證） |
+| 3 命名 → 比較 → 揭曉 | 單元測試失敗（反向舊場次回到千尋） | 命名 → 上一步 → 比較提問 → 上一步 → 剛揭曉的作品（反向＝柯南、一般＝千尋）；轉場 → 命名 → 比較 → 柯南 |
+| 4 舊狀態相容 | — | index 缺失／越界（7、-1、'x'）／指向未公布 → 回到 seen 中編號最大的一則；不新增 seen；seen 無效 → 開場；只公布一部的比較狀態 prompts 為空 |
+
+| 指令 | 結果 |
+|---|---|
+| `node --test tests/unit/intro-flow.test.mjs`（`1ed1a7a` 的 projection.js） | 20 通過、2 失敗（案例 1、3）——回歸測試能抓到錯誤 |
+| `node --test tests/unit/intro-flow.test.mjs`（修正後） | 22 通過 |
+| `npm run test:unit` | 63 通過、0 失敗 |
+| `node tests/e2e/intro_legacy.js`（對 `1ed1a7a` 的伺服器，PORT 8790） | 40 通過、3 失敗（案例 1） |
+| `node tests/e2e/intro_legacy.js`（修正後） | 43 通過（含反向舊場次與一般新場次，教師端操作、投影端資料與畫面驗證） |
+| `node tests/e2e/intro_flow.js` | 101 通過 |
+| `node tests/e2e/intro_keys.js` | 16 通過（連續兩次） |
+
+`intro_keys.js` 在本輪第一次執行時失敗兩次，皆為測試時序問題，產品程式未變更：
+(1) 量測按鈕位置時面板剛好在冷卻結束後重畫（`boundingBox` 為 null）→ 改為等冷卻結束並重試取得位置；
+(2) 快速雙點後 1.2 秒就讀投影畫面，投影端（shim 沒有 Realtime，靠輪詢）尚未更新；資料庫狀態當時已正確（只公布一次）→ 改為最多等 10 秒。
+
+## 未執行
+
+* `tests/e2e/e2e.js`、`layout.js`、`touch.js`、故事卡與小說類型測試、資料庫類測試、本機 Supabase 堆疊（本輪只改 `introBack` 的比較分支）。
+* 實體投影機、平板、簡報筆；Safari、Firefox；正式站（本環境連不到 `hsuanyu9503.github.io`）。
+
+## 上線待辦（需要 repo 管理者，本輪未變更）
+
+1. 合併前確認 Settings → Pages 的 Source 已切換為「GitHub Actions」。
+2. 部署後驗證：`docs/intro-source.json`、`source-assets/intro/` 的 Word 原稿、`docs/screenshots/intro/03-reveal-conan.webp` 回傳 404；
+   `assets/intro/conan-1600.webp`、`assets/intro/chihiro-1600.webp` 可以載入。
