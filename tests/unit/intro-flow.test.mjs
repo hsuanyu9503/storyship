@@ -149,3 +149,82 @@ test('P1：新版正常流程不變——兩部都已公布時，比較頁返回
   assert.equal(b2.index, 1); assert.equal(b2.clues, 3); assert.equal(b2.revealed, false); assert.deepEqual(b2.seen, [0]);
   assert.deepEqual(leak2(P.introProjection(stories, b2, text)), []);
 });
+
+// ---------- 複查第二輪 P1：舊場次按「下一步」不得讓比較題提前透露未公布的主角 ----------
+const S1 = SRC.stories[0];
+// 一部作品的所有答案字詞（作品名、主角兩個名字、揭曉文、圖片檔名、替代文字），以及比較題中提到該部主角的字
+const answerWords = (k) => {
+  const s = SRC.stories[k];
+  return [s.title, s.name_before, s.name_after, s.reveal_text, k ? 'chihiro' : 'conan', `《${s.title}》揭曉圖`, k ? '千尋' : '新一'];
+};
+const leaks = (pj, k) => answerWords(k).filter((w) => JSON.stringify(pj).includes(w));
+function revealByNext(st) {   // 從線索 0 逐條顯示三條並公布，每一步都檢查投影
+  const steps = [];
+  for (let i = 0; i < 4; i++) { st = P.introNext(stories, st, text); steps.push(st); }
+  return steps;
+}
+test('第二輪 P1：seen=[0] 的交會畫面按下一步 → 神祕故事二的中性猜題頁（線索 0）；公布前整份投影都沒有千尋相關內容；公布後才進入比較', () => {
+  let st = P.introNext(stories, { view: 'crossroads', index: 0, clues: 0, revealed: false, seen: [0] }, text);
+  assert.deepEqual([st.view, st.index, st.clues, st.revealed, st.seen], ['story', 1, 0, false, [0]]);
+  assert.equal(P.introNextLabel(stories, { view: 'crossroads', seen: [0] }, text), '進入神祕故事二');
+  let pj = P.introProjection(stories, st, text);
+  assert.equal(pj.story.neutral, '神祕故事二');
+  assert.deepEqual(leaks(pj, 1), []);
+  const steps = revealByNext(st);
+  for (const x of steps.slice(0, 3)) assert.deepEqual(leaks(P.introProjection(stories, x, text), 1), [], `線索 ${x.clues}`);
+  st = steps[3];
+  assert.equal(st.revealed, true); assert.deepEqual(st.seen, [0, 1]);
+  st = P.introNext(stories, st, text);
+  pj = P.introProjection(stories, st, text);
+  assert.equal(st.view, 'compare'); assert.deepEqual(pj.prompts, SRC.compare_prompts);
+  assert.deepEqual(pj.stories.map((s) => s.title), [S1.title, S2.title]);
+});
+test('第二輪 P1：seen=[1] → 神祕故事一（線索 0）；公布前沒有柯南相關內容；補完第一則後直接進入比較，不必再猜第二則', () => {
+  let st = P.introNext(stories, { view: 'crossroads', index: 1, clues: 3, revealed: true, seen: [1] }, text);
+  assert.deepEqual([st.view, st.index, st.clues, st.revealed, st.seen], ['story', 0, 0, false, [1]]);
+  assert.deepEqual(leaks(P.introProjection(stories, st, text), 0), []);
+  const steps = revealByNext(st);
+  for (const x of steps.slice(0, 3)) assert.deepEqual(leaks(P.introProjection(stories, x, text), 0), [], `線索 ${x.clues}`);
+  st = steps[3];
+  assert.deepEqual(st.seen, [0, 1]);
+  assert.equal(P.introNextLabel(stories, st, text), SRC.compare_title);
+  st = P.introNext(stories, st, text);
+  assert.equal(st.view, 'compare');
+  assert.deepEqual(P.introProjection(stories, st, text).prompts, SRC.compare_prompts);
+});
+test('第二輪 P1：seen=[] → 神祕故事一（線索 0），兩部都沒有答案', () => {
+  const st = P.introNext(stories, { view: 'crossroads', index: 0, clues: 0, revealed: false, seen: [] }, text);
+  assert.deepEqual([st.view, st.index, st.clues, st.revealed, st.seen], ['story', 0, 0, false, []]);
+  const pj = P.introProjection(stories, st, text);
+  assert.deepEqual([...leaks(pj, 0), ...leaks(pj, 1)], []);
+});
+test('第二輪 P1：舊的不完整 compare 狀態（seen=[0]，step 0 與 1）重新產生投影：只有柯南，沒有比較題、命名題與千尋相關內容；下一步進入神祕故事二', () => {
+  for (const step of [0, 1]) {
+    const st = { view: 'compare', index: 1, clues: 0, revealed: false, seen: [0], step };
+    const pj = P.introProjection(stories, st, text);
+    assert.deepEqual(pj.prompts, []);
+    assert.deepEqual(pj.stories.map((s) => s.title), [S1.title]);
+    assert.deepEqual(leaks(pj, 1), []);
+    const n = P.introNext(stories, st, text);
+    assert.deepEqual([n.view, n.index, n.clues], ['story', 1, 0]);
+  }
+});
+test('第二輪 P1：兩部都已公布的比較題照常送出；比較 → 命名 → 轉場；舊 crossroads（兩部皆公布）也照常進入比較', () => {
+  const seq = walk();
+  assert.deepEqual(P.introProjection(stories, seq[11], text).prompts, SRC.compare_prompts);
+  assert.deepEqual(P.introProjection(stories, seq[12], text).prompts, [...SRC.compare_prompts, SRC.naming_prompt]);
+  assert.equal(seq[13].view, 'bridge');
+  const c = P.introNext(stories, { view: 'crossroads', index: 1, clues: 3, revealed: true, seen: [0, 1] }, text);
+  assert.deepEqual([c.view, c.step], ['compare', 0]);
+  assert.deepEqual(P.introProjection(stories, c, text).prompts, SRC.compare_prompts);
+});
+test('第二輪 P1：舊狀態前進後按上一步仍不會公布未公布的作品', () => {
+  const st = P.introNext(stories, { view: 'crossroads', seen: [0] }, text);   // 神祕故事二，線索 0
+  const b = P.introBack(stories, st, text);                                   // 回到柯南揭曉（已公布）
+  assert.deepEqual([b.index, b.revealed, b.seen], [0, true, [0]]);
+  assert.deepEqual(leaks(P.introProjection(stories, b, text), 1), []);
+  const st1 = P.introNext(stories, { view: 'crossroads', seen: [1] }, text);  // 神祕故事一，線索 0
+  const b1 = P.introBack(stories, st1, text);                                 // 已在第一則開頭 → 開場
+  assert.equal(b1.view, 'open');
+  assert.deepEqual([...leaks(P.introProjection(stories, b1, text), 0), ...leaks(P.introProjection(stories, b1, text), 1)], []);
+});

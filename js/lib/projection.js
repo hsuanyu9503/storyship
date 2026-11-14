@@ -48,6 +48,10 @@ export function introSub(intro) {
   return intro.revealed ? '01-03' : '01-02';
 }
 
+// 已公布的故事（只計算仍存在的索引）、尚未公布的第一則
+const validSeen = (stories, st) => [...new Set((st.seen || []).filter((i) => Number.isInteger(i) && i >= 0 && i < stories.length))].sort((a, b) => a - b);
+const firstUnrevealed = (stories, st) => { const seen = validSeen(stories, st); for (let i = 0; i < stories.length; i++) if (!seen.includes(i)) return i; return -1; };
+const allRevealed = (stories, st) => stories.length > 0 && firstUnrevealed(stories, st) === -1;
 const namesOf = (s) => (s.name_before && s.name_after ? { name_before: s.name_before, name_after: s.name_after } : {});
 export function introProjection(stories, intro, text) {
   const T = introText(text);
@@ -63,10 +67,12 @@ export function introProjection(stories, intro, text) {
     };
   }
   if (intro.view === 'compare') {
-    // 只放已公布的故事（正常流程走到這裡時全部都已公布）
-    const shown = (intro.seen || []).filter((i) => stories[i]);
-    const prompts = [...T.compare_prompts];
-    if ((intro.step || 0) >= 1 && T.naming_prompt) prompts.push(T.naming_prompt);
+    // 只放已公布的故事。比較提問與命名提問會提到兩部作品的主角（例如「新一」「千尋」），
+    // 所以只有兩部都已公布時才放進投影（複查第二輪 P1）；舊的、不完整的 compare 狀態只顯示已公布的名字變化，不放提問。
+    const shown = validSeen(stories, intro);
+    const complete = allRevealed(stories, intro);
+    const prompts = complete ? [...T.compare_prompts] : [];
+    if (complete && (intro.step || 0) >= 1 && T.naming_prompt) prompts.push(T.naming_prompt);
     return { ...base, view: 'compare', title: T.compare_title, prompts,
       stories: shown.map((i) => ({ title: stories[i].title, image_url: stories[i].image_url || null,
         image_alt: stories[i].image_alt || `《${stories[i].title}》揭曉圖`, ...namesOf(stories[i]) })) };
@@ -110,11 +116,16 @@ export function introNext(stories, st, text) {
   }
   if (st.view === 'story') {
     if (st.clues < n(st.index)) return { ...st, clues: st.clues + 1 };
-    if (!st.revealed) return { ...st, revealed: true, clues: n(st.index), seen: markSeen(st, st.index, true) };
-    if (st.index + 1 < stories.length) return { ...st, index: st.index + 1, clues: 0, revealed: false };
-    return { ...st, view: 'compare', step: 0 };
+    if (!st.revealed) return { ...st, revealed: true, clues: n(st.index), seen: markSeen({ seen: validSeen(stories, st) }, st.index, true) };
+    // 已公布：前往尚未公布的第一則（正常流程＝下一則）；全部都已公布才進入比較
+    const u = firstUnrevealed(stories, st);
+    if (u >= 0) return { ...st, index: u, clues: 0, revealed: false, seen: validSeen(stories, st) };
+    return { ...st, view: 'compare', step: 0, seen: validSeen(stories, st) };
   }
   if (st.view === 'compare' || st.view === 'crossroads') {
+    // 舊場次可能只公布了一部就進入交會畫面：先回到尚未公布的那一則的中性猜題頁（線索從零開始），保留已公布的紀錄
+    const u = firstUnrevealed(stories, st);
+    if (u >= 0) return { ...st, view: 'story', index: u, clues: 0, revealed: false, step: 0, seen: validSeen(stories, st) };
     const step = st.view === 'compare' ? st.step || 0 : -1;
     if (step < lastStep(T)) return { ...st, view: 'compare', step: step + 1 };
     return { ...st, view: 'bridge' };
@@ -126,7 +137,6 @@ export function introNext(stories, st, text) {
 //     舊場次可能只公布了第一則就進入交會畫面（seen: [0]），此時回到第一則的揭曉頁，第二則保持未公布。
 //     沒有任何有效的已公布紀錄時，回到中性的開場畫面。
 //   * 從某一則的開頭返回前一則時，前一則只有在 seen 中才顯示為已公布；否則停在它的三條線索（未公布）。
-const validSeen = (stories, st) => (st.seen || []).filter((i) => Number.isInteger(i) && i >= 0 && i < stories.length);
 export function introBack(stories, st, text) {
   const T = introText(text);
   const n = (i) => (stories[i]?.clues || []).length;
@@ -156,10 +166,13 @@ export function introNextLabel(stories, st, text) {
   if (st.view === 'story') {
     if (st.clues < n(st.index)) return '顯示下一條線索';
     if (!st.revealed) return '公布作品';
-    if (st.index + 1 < stories.length) return '進入' + introNeutral(st.index + 1);
+    const u = firstUnrevealed(stories, st);
+    if (u >= 0) return '進入' + introNeutral(u);
     return introText(text).compare_title;
   }
   if (st.view === 'compare' || st.view === 'crossroads') {
+    const u = firstUnrevealed(stories, st);
+    if (u >= 0) return '進入' + introNeutral(u);
     const T = introText(text);
     return (st.view === 'compare' ? st.step || 0 : -1) < lastStep(T) ? '下一個提問' : (T.bridge_title || '轉場：準備分類');
   }

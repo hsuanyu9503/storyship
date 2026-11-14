@@ -21,7 +21,7 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '
   try {
     execFileSync('bash', [path.join(ROOT, 'tools/build_site.sh'), site], { stdio: 'pipe' });
     const top = fs.readdirSync(site).sort();
-    ok(JSON.stringify(top) === JSON.stringify(['.nojekyll', 'assets', 'config.js', 'css', 'index.html', 'join.html', 'js', 'projector.html', 'teacher.html']),
+    ok(JSON.stringify(top) === JSON.stringify(['.nojekyll', '.storyship-site-build', 'assets', 'config.js', 'css', 'index.html', 'join.html', 'js', 'projector.html', 'teacher.html']),
       `發布產物只有網站檔案（${top.join('、')}）`);
     const files = []; const walk = (d) => { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : files.push(p); } }; walk(site);
     const rel = files.map((f) => path.relative(site, f));
