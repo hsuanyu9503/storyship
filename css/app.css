@@ -610,3 +610,28 @@ img.st-match-img { object-fit: contain; background: #e9e5d8; }
 .teacher-guide p { margin: .4rem 0; line-height: 1.6; }
 .teacher-note { background: #fffbea; border-left: 4px solid #d6a400; padding: .4rem .7rem; margin: .5rem 0; border-radius: 4px; }
 .teacher-note p { margin: .2rem 0 0; white-space: pre-line; line-height: 1.6; }
+
+/* ---------- 字體試排：標楷體（只在 ?font=kai 時，html 有 .font-kai） ----------
+   Windows 內建「標楷體」（DFKai-SB）；macOS／iPadOS 沒有標楷體，依序改用其他楷書字型（BiauKai、Kaiti TC），
+   Linux 可用 AR PL UKai TW（文鼎 PL 中楷）或 TW-Kai（全字庫正楷體）。都沒有時回到現行字體。
+   作品編號（Georgia）、活動代碼（等寬）維持原字型。 */
+html.font-kai { --kai: "標楷體", "DFKai-SB", "BiauKai", "TW-Kai", "Kaiti TC", "STKaiti", "AR PL UKai TW", "AR PL UKai HK", "AR PL UKai CN", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
+html.font-kai body, html.font-kai .reader.sr, html.font-kai button, html.font-kai input, html.font-kai select, html.font-kai textarea { font-family: var(--kai); }
+.font-preview-tag { position: fixed; right: 6px; bottom: 6px; z-index: 2000; font: 12px/1.4 system-ui, sans-serif; background: rgba(176, 112, 42, .9); color: #fff; padding: 2px 8px; border-radius: 6px; pointer-events: none; }
+
+/* ---------- 中文換行（2026-11）：順著語意讀完整句 ----------
+   段落：text-wrap: pretty（避免末行只剩一個字）；短標題、按鈕、提示句：balance（兩行時平均分配，不留一個字在下一行）。
+   瀏覽器不支援時照原本方式換行，不影響內容。 */
+p, li, .st-clue2-body, .st-clue-recap span, .st-reveal2-desc, .st-ic-prompt, .st-intro-opening, .st-lead, .s-lead, .sr-reading p, .intro-now { text-wrap: pretty; }
+h1, h2, h3, button, .btn, .st-title, .st-sub, .st-prompt, .sr-title, .sc-title, .st-clue2-label, .st-ic-title, .st-reveal2-title, .st-chip, .fsr-msg, .sr-foot > span, .bd-hint { text-wrap: balance; }
+/* 名字變化：姓名不拆開；箭頭跟著新名字（「工藤新一」／「→ 江戶川柯南」），不單獨一行 */
+.st-names .st-nm { white-space: nowrap; }
+/* 短的介面文字（按鈕、標題、狀態列、提示）：只在標點與空白處換行（例如「略過，／直接進入下一環節：／分類任務啟動 →」），
+   不在詞中間斷開；真的放不下時才任意斷行（overflow-wrap: anywhere），不會溢出。段落仍逐字換行。 */
+button, .btn, h1, h2, h3, .st-title, .st-chip, .st-clue2-label, .st-reveal2-title, .st-ic-title, .sr-title, .sc-title, .intro-now, .fsr-msg, .bd-hint { word-break: keep-all; overflow-wrap: anywhere; }
+/* 環節名稱（沒有標點）維持逐字換行＋balance，避免在最後留下單獨一個字 */
+/* 窄的環節列表（1180px 以下）：不顯示建議分鐘數，讓環節名稱有足夠寬度 */
+@media (min-width: 761px) and (max-width: 1180px) { .console-grid { grid-template-columns: 200px minmax(0, 1fr); } }
+@media (max-width: 1180px) { .step { grid-template-columns: 2.2em 1fr; } .step .step-min { display: none; } }
+.step, .step > * { word-break: normal; overflow-wrap: normal; }
+.step > * { text-wrap: balance; }

@@ -1,4 +1,5 @@
 // C｜學生端（平板）：極簡、只呈現當下任務所需資訊。
+import '../lib/font-preview.js';   // ?font=kai：標楷體試排（正式版不啟用）
 import { makeClient, configured, rpc, errorText } from '../lib/api.js';
 import { createSync } from '../lib/sync.js';
 import { h, mount, confirmDialog } from '../lib/dom.js';

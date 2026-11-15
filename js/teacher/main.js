@@ -1,4 +1,5 @@
 // B｜教師主控端：控制教學環節、內容揭露與學生連線。
+import '../lib/font-preview.js';   // ?font=kai：標楷體試排（正式版不啟用）
 import { makeClient, configured, rpc, errorText } from '../lib/api.js';
 import { createSync } from '../lib/sync.js';
 import { h, mount, toast, confirmDialog } from '../lib/dom.js';
@@ -344,7 +345,7 @@ function renderHead() {
   const ph = phaseById(S.state.phase);
   const ended = S.session.status === 'ended';
   mount(S.els.head, h('header.topbar',
-    h('a.btn', { href: '#' }, '← 場次'),
+    h('a.btn', { href: '#' }, '←\u00a0場次'),
     h('strong', S.session.title),
     h('span.code', '代碼 ', h('b.mono', S.session.join_code)),
     h('span.pill', `目前：${ph?.id} ${ph?.name}`),
@@ -381,8 +382,8 @@ function renderSteps() {
       },
     }, h('span.step-id', p.id), h('span.step-name', p.name), p.minutes ? h('span.step-min', p.minutes + "'") : null)),
     h('div.step-nav',
-      h('button', { disabled: !prevPhase(cur), onclick: () => goPhase(prevPhase(cur)) }, '← 上一環節'),
-      h('button.primary', { disabled: !nextPhase(cur), onclick: () => goPhase(nextPhase(cur)) }, '下一環節 →')));
+      h('button', { disabled: !prevPhase(cur), onclick: () => goPhase(prevPhase(cur)) }, '←\u00a0上一環節'),
+      h('button.primary', { disabled: !nextPhase(cur), onclick: () => goPhase(nextPhase(cur)) }, '下一環節\u00a0→')));
 }
 
 function updateImgRetry() {
@@ -478,7 +479,7 @@ const PANELS = {
           h('label.toggle.big', h('input', { type: 'checkbox', checked: S.session.join_open,
             onchange: async (e) => { try { await rpc(client, 'teacher_update_session', { p_session: S.session.id, p_join_open: e.target.checked }); S.sync.ping('state'); S.sync.refresh(); } catch (er) { toast(errorText(er), 'error'); } } }),
             '開放新學生加入'))),
-      h('div.row', h('button.primary.big', { onclick: () => goPhase('01') }, '啟動第一環節：走進故事世界 →')));
+      h('div.row', h('button.primary.big', { onclick: () => goPhase('01') }, '啟動第一環節：走進故事世界\u00a0→')));
   },
 
   '01': () => {
@@ -488,17 +489,17 @@ const PANELS = {
     const nextLabel = P.introNextLabel(stories, c, S.content.introText);
     const back = P.introBack(stories, c, S.content.introText);
     const now = c.view === 'open' ? '開場（單元名稱與開場語）'
-      : c.view === 'story' ? `${P.introNeutral(c.index)}：${c.revealed ? '已公布作品' : `已顯示 ${c.clues} / ${stories[c.index]?.clues.length || 0} 條線索`}`
+      : c.view === 'story' ? `${P.introNeutral(c.index)}：${c.revealed ? '已公布作品' : `已顯示\u00a0${c.clues}\u00a0/\u00a0${stories[c.index]?.clues.length || 0}\u00a0條線索`}`
       : c.view === 'compare' ? `${T.compare_title}（提問 ${(c.step || 0) + 1}）`
       : c.view === 'bridge' ? (T.bridge_title || '轉場') : '故事交會（舊畫面）';
     return h('div.intro-ctl',
       h('p.intro-now', '投影目前：', h('b', now)),
       h('div.intro-btns',
-        h('button.intro-back', { type: 'button', onclick: () => intro('back'), disabled: !back }, '← 上一步'),
+        h('button.intro-back', { type: 'button', onclick: () => intro('back'), disabled: !back }, '←\u00a0上一步'),
         h('button.primary.big.intro-next', { type: 'button', onclick: () => intro('next'), disabled: introHeld(), 'aria-disabled': introHeld() ? 'true' : null },
-          nextLabel ? nextLabel + ' →' : `進入下一環節：${phaseById('02').name} →`)),
+          nextLabel ? nextLabel + '\u00a0→' : `進入下一環節：${phaseById('02').name}\u00a0→`)),
       h('p.muted.small', '每按一次只前進一步；作品名稱、名字與作品圖只在按「公布作品」後投影。鍵盤或簡報筆：→／PageDown 下一步、←／PageUp 上一步。'),
-      nextLabel ? h('div.row', h('button', { type: 'button', onclick: () => goPhase('02') }, `略過，直接進入下一環節：${phaseById('02').name} →`)) : null,
+      nextLabel ? h('div.row', h('button', { type: 'button', onclick: () => goPhase('02') }, `略過，直接進入下一環節：${phaseById('02').name}\u00a0→`)) : null,
       h('h3', '教師預覽（含未公開內容，不會投影）'),
       h('div.intro-preview', stories.map((st, i) => {
         const here = i === c.index && c.view === 'story';
@@ -528,7 +529,7 @@ const PANELS = {
           : h('button', { onclick: () => publish('02', '02-qr', P.joinProjection()) }, '投影重新顯示 QR Code（補加入）'),
         h('button', { onclick: () => setFlags({ p_focus_mode: !S.state.focus_mode }) },
           S.state.focus_mode ? '關閉學生專注模式' : '開啟學生專注模式'),
-        h('button.primary', { onclick: () => goPhase('03') }, '開放第三環節：我的故事分類 →')),
+        h('button.primary', { onclick: () => goPhase('03') }, '開放第三環節：我的故事分類\u00a0→')),
       h('p.muted', '提醒：網頁無法遠端強制學生裝置全螢幕；學生按「進入探索模式」時會在支援的瀏覽器請求全螢幕，不支援時自動使用網站專注模式。'));
   },
 
@@ -537,7 +538,7 @@ const PANELS = {
   '04': () => panelGroups(),
 
   '05': () => h('div', S.results.panel05(),
-    h('button', { onclick: () => goPhase('06') }, '進入第六環節 →')),
+    h('button', { onclick: () => goPhase('06') }, '進入第六環節\u00a0→')),
 
   '06': () => {
     const c = ctl06();
@@ -547,7 +548,7 @@ const PANELS = {
       h('div.btn-grid',
         h('button', { onclick: () => genre('recap') }, '06-01 分類背後的祕密'),
         h('button', { onclick: () => genre('overview') }, '06-03 顯示小說類型總覽'),
-        h('button.primary', { onclick: () => goPhase('07') }, '進入第七環節 →')),
+        h('button.primary', { onclick: () => goPhase('07') }, '進入第七環節\u00a0→')),
       teacherGuide(S.content.genreGuide, true),
       h('h3', '選擇小說類型（點選＝私下預覽，不會投影）'),
       h('div.genre-pick', gs.map((g, i) => h('button.genre-btn' + (pv === i ? '.sel' : '') + ((c.revealed || []).includes(i) ? '.pub' : ''),
@@ -562,7 +563,7 @@ const PANELS = {
   },
 
   '07': () => h('div', S.results.panel07(),
-    h('button.primary', { onclick: () => goPhase('99') }, '顯示結束畫面 →')),
+    h('button.primary', { onclick: () => goPhase('99') }, '顯示結束畫面\u00a0→')),
 
   '99': () => h('div', h('p', '投影顯示結束畫面。'),
     S.session.status === 'ended' ? h('p.muted', '場次已結束。') : h('button.danger', { onclick: endSession }, '結束場次（學生不能再修改）')),
@@ -646,7 +647,7 @@ function panelPersonal() {
       locked || ended ? null : h('button', { onclick: () => setFlags({ p_editing_paused: !paused }) },
         paused ? '恢復個人分類' : '暫停個人分類'),
       ended ? null : h('button.primary', { onclick: () => goPhase('04') },
-        locked ? '進入第四環節：小組共作 →' : '結束個人分類，進入第四環節 →')),
+        locked ? '進入第四環節：小組共作\u00a0→' : '結束個人分類，進入第四環節\u00a0→')),
     h('table.tbl.pp-table',
       h('thead', h('tr', h('th', '組別'), h('th', '已加入'), h('th', '已完成個人分類'), h('th', ''))),
       h('tbody', S.groups.flatMap((g) => {
@@ -735,7 +736,7 @@ function panelGroups() {
       ended ? null : h('button', { onclick: () => setFlags({ p_editing_paused: !paused }) }, paused ? '恢復全班編輯' : '暫停全班編輯'),
       wrap ? h('button', { onclick: () => publish('04', '04', P.instructionProjection('04')) }, '投影：返回任務引導')
            : h('button', { onclick: () => publish('04', '04-wrap', P.groupWrapProjection()) }, '投影：提醒整理並提交'),
-      ended ? null : h('button.primary', { onclick: () => goPhase('05') }, '結束共同分類，進入第五環節 →')),
+      ended ? null : h('button.primary', { onclick: () => goPhase('05') }, '結束共同分類，進入第五環節\u00a0→')),
     h('table.tbl.gp-table',
       h('thead', h('tr', h('th', '組別'), h('th', '已分類'), h('th', '分類數'), h('th', '理由完成'), h('th', '狀態'), h('th', '連線'), h('th', ''))),
       h('tbody', rows.map((x) => h('tr',
