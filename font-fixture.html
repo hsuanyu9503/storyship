@@ -8,12 +8,12 @@
   <style>body { margin: 0; background: #fbfaf6; } .fx-teacher { padding: 16px; max-width: 900px; }</style>
 </head>
 <body>
-<!-- 字體試排用的固定畫面（本機預覽用，不會發布到網站）。網址：font-fixture.html?screen=<畫面>&font=kai|default
+<!-- 字體試排用的固定畫面（本機預覽用，不會發布到網站）。網址：font-fixture.html?screen=<畫面>&font=kai|old
      畫面：clues2（投影：千尋的三條線索）、names（投影：兩部作品的名字比較＋命名提問）、reveal2（投影：公布千尋）、
            card04（學生：《動物方城市》故事卡背面）、teacher（教師端 01 操作按鈕） -->
 <script type="module">
   const q = new URLSearchParams(location.search);
-  if (q.get('font') === 'kai') document.documentElement.classList.add('font-kai');
+  if (q.get('font') === 'old' || q.get('font') === 'default') document.documentElement.classList.add('font-old');   // 預設＝標楷體（正式）；old＝改版前字體
   const screen = q.get('screen') || 'clues2';
   const P = await import('./js/lib/projection.js');
   const { renderProjection } = await import('./js/lib/render-projection.js');

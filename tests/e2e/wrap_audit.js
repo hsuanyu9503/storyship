@@ -7,13 +7,13 @@
 //     twoLine  按鈕／短標題變成兩行以上（只列出，供判斷）
 //   範圍：投影端第 01 環節（開場、兩則故事三條線索、兩次公布、比較＋命名、轉場）、閱讀卡背面（八張）與正面標題、
 //         看板小卡、學生端提示、教師端（真正的教師主控台：01 每一步的按鈕、環節列表）
-//   FONT=kai：在同樣的畫面套用標楷體試排（html.font-kai）。OUT=輸出 JSON 路徑。
+//   全站預設為標楷體；FONT=old：在同樣的畫面改用改版前的字體（html.font-old）對照。OUT=輸出 JSON 路徑。
 //   需要 sf_story 的 shim（PORT 8789）。
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const BASE = process.env.BASE || 'http://localhost:8789';
-const FONT = process.env.FONT || 'default';
+const FONT = process.env.FONT || 'kai';
 const ROOT = path.join(__dirname, '../..');
 const INTRO = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/intro-source.json'), 'utf8'));
 const CARDS = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/story-cards-source.json'), 'utf8'));
@@ -88,7 +88,7 @@ const ANALYZE = () => {
   const add = (screen, size, list) => { for (const x of list) results.push({ screen, size, ...x }); };
   async function newPage(w, h) {
     const ctx = await browser.newContext({ viewport: { width: w, height: h } });
-    await ctx.addInitScript((f) => { try { if (f === 'kai') localStorage.setItem('sf.fontPreview', 'kai'); else localStorage.removeItem('sf.fontPreview'); } catch { /* */ } }, FONT);
+    await ctx.addInitScript((f) => { if (f === 'old') document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('font-old')); }, FONT);
     const p = await ctx.newPage();
     return p;
   }

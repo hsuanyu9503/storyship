@@ -37,10 +37,10 @@
   </select></label>
 </header>
 <p class="note">左右兩邊是同一份內容、同一個尺寸（縮小顯示）。右邊使用這台電腦的「標楷體」（Windows 的 DFKai-SB）；
-  若這台電腦沒有標楷體，會依序改用其他楷書字型，都沒有時與左邊相同。實際教學畫面也可以在網址加上 <code>?font=kai</code> 試用，加 <code>?font=default</code> 取消。</p>
+  若這台電腦沒有標楷體，會依序改用其他楷書字型。網站已全面改用標楷體；左邊是改版前的字體，僅供對照。</p>
 <div class="grid">
-  <div class="col"><h2>現行字體</h2><div class="frame" id="f0"></div></div>
-  <div class="col"><h2>標楷體（試排）</h2><div class="frame" id="f1"></div></div>
+  <div class="col"><h2>改版前字體</h2><div class="frame" id="f0"></div></div>
+  <div class="col"><h2>標楷體（正式）</h2><div class="frame" id="f1"></div></div>
 </div>
 <script>
   const sel = document.getElementById('screen'); const size = document.getElementById('size');
@@ -53,8 +53,8 @@
       box.innerHTML = '';
       const f = document.createElement('iframe');
       f.width = w; f.height = h; f.style.transform = `scale(${scale})`;
-      f.title = i ? '標楷體' : '現行字體';
-      f.src = `font-fixture.html?screen=${sel.value}&font=${i ? 'kai' : 'default'}`;
+      f.title = i ? '標楷體' : '改版前字體';
+      f.src = `font-fixture.html?screen=${sel.value}&font=${i ? 'kai' : 'old'}`;
       box.append(f);
     });
   }

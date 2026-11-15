@@ -4,7 +4,9 @@
   --accent: #2f6f5e; --accent-ink: #fff; --accent-soft: #e3f0ea;
   --warn: #b7791f; --warn-soft: #fdf3e1; --bad: #b83232; --bad-soft: #fbe9e9;
   --radius: 12px;
-  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  /* 全站字體：標楷體（Windows 內建 DFKai-SB）；macOS／iPadOS 沒有標楷體，依序改用其他楷書字型，都沒有時用黑體。見下方「字體」段落 */
+  --kai: "標楷體", "DFKai-SB", "BiauKai", "TW-Kai", "Kaiti TC", "STKaiti", "AR PL UKai TW", "AR PL UKai HK", "AR PL UKai CN", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-family: var(--kai);
   color: var(--ink); background: var(--bg);
 }
 * { box-sizing: border-box; }
@@ -394,7 +396,7 @@ img.st-match-img { object-fit: contain; background: #e9e5d8; }
 .reader.sr { --sr-ink: #243c35; --sr-muted: #65716a; --sr-line: #d5dacf; --sr-paper: #fffcf5; --sr-green: #294c40;
   border: none; padding: 0; background: transparent; overflow: visible; color: var(--sr-ink);
   width: min(600px, calc(100vw - 32px)); max-width: none; height: min(660px, calc(100vh - 32px)); height: min(660px, calc(100dvh - 32px)); max-height: none;
-  font-family: "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif; }
+  font-family: var(--kai); }
 .reader.sr[open] { display: flex; flex-direction: column; gap: 10px; }
 .reader::backdrop { background: rgba(20, 30, 25, .55); }
 .sr button { font: inherit; min-height: 44px; min-width: 44px; border: 0; border-radius: 10px; padding: 10px 16px; cursor: pointer; background: #e4ece5; color: var(--sr-green); font-weight: 700; }
@@ -611,13 +613,14 @@ img.st-match-img { object-fit: contain; background: #e9e5d8; }
 .teacher-note { background: #fffbea; border-left: 4px solid #d6a400; padding: .4rem .7rem; margin: .5rem 0; border-radius: 4px; }
 .teacher-note p { margin: .2rem 0 0; white-space: pre-line; line-height: 1.6; }
 
-/* ---------- 字體試排：標楷體（只在 ?font=kai 時，html 有 .font-kai） ----------
+/* ---------- 字體：全站標楷體（2026-11 正式套用） ----------
    Windows 內建「標楷體」（DFKai-SB）；macOS／iPadOS 沒有標楷體，依序改用其他楷書字型（BiauKai、Kaiti TC），
-   Linux 可用 AR PL UKai TW（文鼎 PL 中楷）或 TW-Kai（全字庫正楷體）。都沒有時回到現行字體。
-   作品編號（Georgia）、活動代碼（等寬）維持原字型。 */
-html.font-kai { --kai: "標楷體", "DFKai-SB", "BiauKai", "TW-Kai", "Kaiti TC", "STKaiti", "AR PL UKai TW", "AR PL UKai HK", "AR PL UKai CN", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
-html.font-kai body, html.font-kai .reader.sr, html.font-kai button, html.font-kai input, html.font-kai select, html.font-kai textarea { font-family: var(--kai); }
-.font-preview-tag { position: fixed; right: 6px; bottom: 6px; z-index: 2000; font: 12px/1.4 system-ui, sans-serif; background: rgba(176, 112, 42, .9); color: #fff; padding: 2px 8px; border-radius: 6px; pointer-events: none; }
+   Linux 可用 AR PL UKai TW（文鼎 PL 中楷）或 TW-Kai（全字庫正楷體）。都沒有時改用黑體，各裝置字體可能不同。
+   作品編號（Georgia）、活動代碼（等寬）維持原字型。標楷體沒有粗體，粗體由瀏覽器模擬（已確認接受）。 */
+textarea { font-family: var(--kai); }
+/* 只供本機對照頁（font-fixture.html?font=old）顯示改版前的字體 */
+html.font-old { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif; }
+html.font-old .reader.sr, html.font-old textarea { font-family: "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif; }
 
 /* ---------- 中文換行（2026-11）：順著語意讀完整句 ----------
    段落：text-wrap: pretty（避免末行只剩一個字）；短標題、按鈕、提示句：balance（兩行時平均分配，不留一個字在下一行）。

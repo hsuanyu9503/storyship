@@ -1,5 +1,4 @@
 // B｜教師主控端：控制教學環節、內容揭露與學生連線。
-import '../lib/font-preview.js';   // ?font=kai：標楷體試排（正式版不啟用）
 import { makeClient, configured, rpc, errorText } from '../lib/api.js';
 import { createSync } from '../lib/sync.js';
 import { h, mount, toast, confirmDialog } from '../lib/dom.js';

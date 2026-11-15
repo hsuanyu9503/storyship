@@ -19,8 +19,8 @@
 | `node tests/e2e/intro_legacy.js` | 01 複查第二輪：把場次寫成舊版交會畫面（seen=[0]／[1]／[]）後用新版教師端操作：下一步進入未公布那一則的中性猜題頁、逐條線索與公布、兩部都公布才出現比較題、上一步不公布；每一步檢查整份投影資料、API、畫面與圖片 | sf_story＋對應 shim＋Playwright |
 | `bash tests/e2e/site_build_safety.sh` | 打包腳本的輸出路徑安全：只在拋棄式副本中測試 assets、既有資料夾、符號連結被拒絕且原檔完整；正常與重複打包成功 | bash（不需要資料庫） |
 | `node tests/e2e/fullscreen.js` | 學生退出全螢幕的提示：首次進入、03 分類中（閱讀卡背面）退出再返回、連續退出、觸控／鍵盤／滑鼠、請求被拒絕、裝置不支援；作答與翻面狀態保留、不重新整理 | shim（sf_story）＋Playwright |
-| `node tests/e2e/wrap_audit.js`（`FONT=kai` 為標楷體試排） | 中文換行：逐字量測投影 01、八張閱讀卡、看板、學生提示、教師主控台的每一行：末行一字、行首標點、姓名拆開、內容被截掉；列出變兩行的按鈕與標題 | shim（sf_story）＋Playwright |
-| `node tests/e2e/font_shots.js`、`wrap_shots.js` | 標楷體對照截圖（`font-fixture.html`，需在專案根目錄開靜態伺服器）、換行修正前後截圖；都記錄實際字型 | Playwright |
+| `node tests/e2e/wrap_audit.js`（預設為標楷體；`FONT=old` 為改版前字體） | 中文換行：逐字量測投影 01、八張閱讀卡、看板、學生提示、教師主控台的每一行：末行一字、行首標點、姓名拆開、內容被截掉；列出變兩行的按鈕與標題 | shim（sf_story）＋Playwright |
+| `node tests/e2e/font_shots.js`、`wrap_shots.js` | 標楷體與改版前字體的對照截圖（`font-fixture.html`，需在專案根目錄開靜態伺服器）、換行修正前後截圖；都記錄實際字型 | Playwright |
 | `node tests/e2e/story_reader.js` | 03／04 的故事卡與雙面閱讀卡（八張逐一：編號、名稱、圖片、段落、元素；開啟、翻面、捲動、翻回、關閉；1366×1024、1024×768、768×1024 的字級、按鈕、溢出與最長文案；動畫、快速連點、減少動態效果；鍵盤與焦點；拖曳與點選移動不受影響；兩位組員互不影響、沒有寫入請求；WebP 尺寸選擇、失敗與恢復、移除後釋放；07 投影小卡） | `setup_story_db.sh` 建立的 sf_story＋對應的 shim＋Playwright |
 | `node tests/e2e/story_shots.js` | 故事卡截圖（看板、閱讀卡正反面，三種尺寸，像素比 2）與翻面錄影（WebM） | 同上 |
 | `node tests/e2e/genre_image_retry.js` | 類型圖片載入失敗後的恢復（06、07；公開版本不變）、online 事件、永久 404 的重試上限與手動重試、切換類型後取消舊圖重試、成功不重複下載、教師預覽與投影各自恢復、ResizeObserver 釋放、教師平板（觸控 1366×1024、1024×768）預覽下方的「重新載入預覽圖片」尺寸與點擊 | shim＋Playwright |

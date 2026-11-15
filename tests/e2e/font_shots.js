@@ -19,7 +19,7 @@ const PLAN = {
   const fonts = {};
   for (const [screen, { sel, sizes }] of Object.entries(PLAN)) {
     for (const [w, h] of sizes) {
-      for (const font of ['default', 'kai']) {
+      for (const font of ['old', 'kai']) {
         const p = await browser.newPage({ viewport: { width: w, height: h } });
         await p.goto(`${BASE}/font-fixture.html?screen=${screen}&font=${font}`);
         await p.waitForFunction(() => document.documentElement.dataset.ready === '1');
