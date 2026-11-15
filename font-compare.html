@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>字體對照</title>
+  <style>
+    :root { --ink: #1d2a24; --line: #cfd8d2; }
+    body { margin: 0; font: 15px/1.5 system-ui, "Microsoft JhengHei", sans-serif; color: var(--ink); background: #eef1ec; }
+    header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 14px; background: #fff; border-bottom: 1px solid var(--line); }
+    select, button { font: inherit; padding: 6px 10px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+    .col h2 { margin: 0 0 6px; font-size: 15px; }
+    .frame { position: relative; overflow: hidden; border: 1px solid var(--line); background: #fff; }
+    iframe { border: 0; transform-origin: 0 0; display: block; }
+    .note { padding: 0 14px 12px; color: #4b5a52; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<!-- 本機預覽用（不會發布到網站）。在專案資料夾執行：python -m http.server 8080，再開 http://localhost:8080/font-compare.html -->
+<header>
+  <strong>字體對照：現行字體 ／ 標楷體</strong>
+  <label>畫面 <select id="screen">
+    <option value="clues2">投影：千尋的三條線索</option>
+    <option value="names">投影：兩部作品的名字比較</option>
+    <option value="reveal2">投影：公布《神隱少女》</option>
+    <option value="card04">學生：《動物方城市》故事卡背面</option>
+    <option value="teacher">教師端：01 操作按鈕</option>
+  </select></label>
+  <label>尺寸 <select id="size">
+    <option value="1920x1080">16:9 投影 1920×1080</option>
+    <option value="1366x768">16:9 筆電／投影 1366×768</option>
+    <option value="1024x768">平板橫向 1024×768</option>
+    <option value="768x1024">平板直向 768×1024</option>
+    <option value="390x844">窄螢幕 390×844</option>
+  </select></label>
+</header>
+<p class="note">左右兩邊是同一份內容、同一個尺寸（縮小顯示）。右邊使用這台電腦的「標楷體」（Windows 的 DFKai-SB）；
+  若這台電腦沒有標楷體，會依序改用其他楷書字型。網站已全面改用標楷體；左邊是改版前的字體，僅供對照。</p>
+<div class="grid">
+  <div class="col"><h2>改版前字體</h2><div class="frame" id="f0"></div></div>
+  <div class="col"><h2>標楷體（正式）</h2><div class="frame" id="f1"></div></div>
+</div>
+<script>
+  const sel = document.getElementById('screen'); const size = document.getElementById('size');
+  function draw() {
+    const [w, h] = size.value.split('x').map(Number);
+    ['f0', 'f1'].forEach((id, i) => {
+      const box = document.getElementById(id);
+      const scale = Math.min(1, (box.clientWidth || (innerWidth / 2 - 24)) / w);
+      box.style.height = Math.round(h * scale) + 'px';
+      box.innerHTML = '';
+      const f = document.createElement('iframe');
+      f.width = w; f.height = h; f.style.transform = `scale(${scale})`;
+      f.title = i ? '標楷體' : '改版前字體';
+      f.src = `font-fixture.html?screen=${sel.value}&font=${i ? 'kai' : 'old'}`;
+      box.append(f);
+    });
+  }
+  sel.onchange = size.onchange = draw; addEventListener('resize', draw); draw();
+</script>
+</body>
+</html>

@@ -77,7 +77,7 @@ async function until(fn, ms = 10000) { const t = Date.now() + ms; while (Date.no
     // ---------- C. 快速雙點 ----------
     const { SID, P } = await newSession();
     const nextBtn = T.locator('.intro-next');
-    const label = async () => (await nextBtn.innerText()).trim();
+    const label = async () => (await nextBtn.innerText()).replace(/\u00a0/g, ' ').trim();
     // 走到神祕故事一的第三條線索（按鈕為「公布作品」）
     while ((await label()) !== '公布作品 →') {
       const r0 = Number((await state(SID)).rev);

@@ -36,6 +36,9 @@ export function introSources(url) {
   const m = /^(assets\/intro\/[a-z0-9-]+)-1600\.webp$/.exec(url || '');
   return m ? [{ url: `${m[1]}-960.webp`, w: 960 }, { url, w: 1600 }] : null;
 }
+// 名字變化：兩個姓名各自不拆開，箭頭與新名字放在一起（換行時是「舊名」／「→ 新名」）
+const names = (s) => h('div.st-names', h('span.st-nm', s.name_before), ' ',
+  h('span.st-nm', h('span.st-arrow', { 'aria-label': '改名為' }, '→'), '\u00a0', s.name_after));
 const introVisual = (url, alt) => visualBox(url, alt, { slot: 'landscape', sources: introSources(url) });
 const genreVisualBox = (url, alt, slot) => visualBox(url, alt, { slot, sources: genreSources(url) });
 const genreAlt = (name) => `「${name}」類型情境插畫（觀察線索）`;
@@ -90,7 +93,7 @@ const SCREENS = {
         h('div.st-ic-pairs', (p.stories || []).map((s) => h('div.st-ic-pair',
           h('div.st-ic-img', introVisual(s.image_url, s.image_alt)),
           h('div.st-ic-text', h('div.st-ic-title', `《${s.title}》`),
-            s.name_before ? h('div.st-names', h('span', s.name_before), h('span.st-arrow', { 'aria-label': '改名為' }, '→'), h('span', s.name_after)) : null)))),
+            s.name_before ? names(s) : null)))),
         h('div.st-ic-prompts', (p.prompts || []).map((q) => h('p.st-ic-prompt', q))));
     }
     if (p.view === 'bridge') {
@@ -109,7 +112,7 @@ const SCREENS = {
           h('div.st-reveal2-img', introVisual(s.image_url, s.image_alt || `《${s.title}》揭曉圖`)),
           h('div.st-reveal2-text',
             h('div.st-reveal2-title', `《${s.title}》`),
-            s.name_before ? h('div.st-names', h('span', s.name_before), h('span.st-arrow', { 'aria-label': '改名為' }, '→'), h('span', s.name_after)) : null,
+            s.name_before ? names(s) : null,
             h('p.st-reveal2-desc', s.reveal_text || ''))),
         h('ol.st-clue-recap', shown.map((c) => h('li', h('b', `線索${c.no || ''}｜${c.label}`), h('span', c.body)))));
     }

@@ -4,7 +4,9 @@
   --accent: #2f6f5e; --accent-ink: #fff; --accent-soft: #e3f0ea;
   --warn: #b7791f; --warn-soft: #fdf3e1; --bad: #b83232; --bad-soft: #fbe9e9;
   --radius: 12px;
-  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  /* 全站字體：標楷體（Windows 內建 DFKai-SB）；macOS／iPadOS 沒有標楷體，依序改用其他楷書字型，都沒有時用黑體。見下方「字體」段落 */
+  --kai: "標楷體", "DFKai-SB", "BiauKai", "TW-Kai", "Kaiti TC", "STKaiti", "AR PL UKai TW", "AR PL UKai HK", "AR PL UKai CN", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-family: var(--kai);
   color: var(--ink); background: var(--bg);
 }
 * { box-sizing: border-box; }
@@ -288,6 +290,19 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
 .s-card-img { height: 110px; width: 100%; }
 .s-card-title { font-weight: 700; font-size: 1.15rem; } .s-card-sum { color: var(--muted); font-size: .95rem; }
 body.focus-mode { overscroll-behavior: none; }
+/* 學生退出全螢幕時的提示（js/student/fullscreen.js）：浮在目前活動畫面上，不重畫、不搶焦點 */
+.fsr-box { position: fixed; z-index: 1000; inset: auto 0 auto 0; top: 12px; margin: 0 auto; width: min(560px, calc(100vw - 24px));
+  padding: 0; border: 3px solid #b0702a; border-radius: 16px; background: #fff8ec; color: #3b2a12; box-shadow: 0 10px 32px rgba(0,0,0,.28); overflow: visible; }
+.fsr-box[hidden] { display: none; }
+.fsr-box:popover-open { display: block; }
+.fsr-inner { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px 18px; text-align: center; }
+.fsr-msg { margin: 0; font-size: 1.3rem; font-weight: 800; line-height: 1.45; text-wrap: balance; }
+.fsr-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+/* 選擇器加上 .fsr-box：提示放進閱讀卡（.sr）時，不被閱讀卡的按鈕樣式覆蓋 */
+.fsr-box .fsr-msg { font-family: inherit; }
+.fsr-box button.fsr-btn { font-size: 1.35rem; min-height: 56px; min-width: 220px; padding: .5em 1.4em; border-radius: 12px; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); font-weight: 700; }
+.fsr-box button.fsr-continue { font-size: 1.1rem; min-height: 56px; min-width: 140px; padding: .5em 1.2em; border-radius: 12px; background: #fff; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
+.fsr-btn:focus-visible, .fsr-continue:focus-visible { outline: 3px solid #b0702a; outline-offset: 3px; }
 body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 
 /* ---------- Phase 2：分類工作區（個人分類；Phase 3 小組共作共用） ---------- */
@@ -381,7 +396,7 @@ img.st-match-img { object-fit: contain; background: #e9e5d8; }
 .reader.sr { --sr-ink: #243c35; --sr-muted: #65716a; --sr-line: #d5dacf; --sr-paper: #fffcf5; --sr-green: #294c40;
   border: none; padding: 0; background: transparent; overflow: visible; color: var(--sr-ink);
   width: min(600px, calc(100vw - 32px)); max-width: none; height: min(660px, calc(100vh - 32px)); height: min(660px, calc(100dvh - 32px)); max-height: none;
-  font-family: "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif; }
+  font-family: var(--kai); }
 .reader.sr[open] { display: flex; flex-direction: column; gap: 10px; }
 .reader::backdrop { background: rgba(20, 30, 25, .55); }
 .sr button { font: inherit; min-height: 44px; min-width: 44px; border: 0; border-radius: 10px; padding: 10px 16px; cursor: pointer; background: #e4ece5; color: var(--sr-green); font-weight: 700; }
@@ -597,3 +612,29 @@ img.st-match-img { object-fit: contain; background: #e9e5d8; }
 .teacher-guide p { margin: .4rem 0; line-height: 1.6; }
 .teacher-note { background: #fffbea; border-left: 4px solid #d6a400; padding: .4rem .7rem; margin: .5rem 0; border-radius: 4px; }
 .teacher-note p { margin: .2rem 0 0; white-space: pre-line; line-height: 1.6; }
+
+/* ---------- 字體：全站標楷體（2026-11 正式套用） ----------
+   Windows 內建「標楷體」（DFKai-SB）；macOS／iPadOS 沒有標楷體，依序改用其他楷書字型（BiauKai、Kaiti TC），
+   Linux 可用 AR PL UKai TW（文鼎 PL 中楷）或 TW-Kai（全字庫正楷體）。都沒有時改用黑體，各裝置字體可能不同。
+   作品編號（Georgia）、活動代碼（等寬）維持原字型。標楷體沒有粗體，粗體由瀏覽器模擬（已確認接受）。 */
+textarea { font-family: var(--kai); }
+/* 只供本機對照頁（font-fixture.html?font=old）顯示改版前的字體 */
+html.font-old { font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif; }
+html.font-old .reader.sr, html.font-old textarea { font-family: "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif; }
+
+/* ---------- 中文換行（2026-11）：順著語意讀完整句 ----------
+   段落：text-wrap: pretty（避免末行只剩一個字）；短標題、按鈕、提示句：balance（兩行時平均分配，不留一個字在下一行）。
+   瀏覽器不支援時照原本方式換行，不影響內容。 */
+p, li, .st-clue2-body, .st-clue-recap span, .st-reveal2-desc, .st-ic-prompt, .st-intro-opening, .st-lead, .s-lead, .sr-reading p, .intro-now { text-wrap: pretty; }
+h1, h2, h3, button, .btn, .st-title, .st-sub, .st-prompt, .sr-title, .sc-title, .st-clue2-label, .st-ic-title, .st-reveal2-title, .st-chip, .fsr-msg, .sr-foot > span, .bd-hint { text-wrap: balance; }
+/* 名字變化：姓名不拆開；箭頭跟著新名字（「舊名」／「→ 新名」），不單獨一行 */
+.st-names .st-nm { white-space: nowrap; }
+/* 短的介面文字（按鈕、標題、狀態列、提示）：只在標點與空白處換行（例如「略過，／直接進入下一環節：／分類任務啟動 →」），
+   不在詞中間斷開；真的放不下時才任意斷行（overflow-wrap: anywhere），不會溢出。段落仍逐字換行。 */
+button, .btn, h1, h2, h3, .st-title, .st-chip, .st-clue2-label, .st-reveal2-title, .st-ic-title, .sr-title, .sc-title, .intro-now, .fsr-msg, .bd-hint { word-break: keep-all; overflow-wrap: anywhere; }
+/* 環節名稱（沒有標點）維持逐字換行＋balance，避免在最後留下單獨一個字 */
+/* 窄的環節列表（1180px 以下）：不顯示建議分鐘數，讓環節名稱有足夠寬度 */
+@media (min-width: 761px) and (max-width: 1180px) { .console-grid { grid-template-columns: 200px minmax(0, 1fr); } }
+@media (max-width: 1180px) { .step { grid-template-columns: 2.2em 1fr; } .step .step-min { display: none; } }
+.step, .step > * { word-break: normal; overflow-wrap: normal; }
+.step > * { text-wrap: balance; }
