@@ -78,7 +78,7 @@ const LEAK2 = ['神隱少女', '神隱', '千尋', '荻野', '小千', 'chihiro'
     };
     const btn = (re) => T.locator('.intro-btns button').filter({ hasText: re });
     const nextBtn = () => T.locator('.intro-next');
-    const nextLabel = async () => (await nextBtn().innerText()).trim();
+    const nextLabel = async () => (await nextBtn().innerText()).replace(/\u00a0/g, ' ').trim();
     async function step(expectRevDelta = 1) {
       const r0 = await rev(); const b0 = bodies.length;
       await nextBtn().tap();

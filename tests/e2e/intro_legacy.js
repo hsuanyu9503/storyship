@@ -65,7 +65,7 @@ async function until(fn, ms = 10000) { const t = Date.now() + ms; while (Date.no
     };
     const next = async () => { await sleep(750); const r0 = await rev(); await T.locator('.intro-next').click(); await until(async () => (await rev()) === r0 + 1, 8000); await until(async () => bodies.length && JSON.stringify(await proj0()) === JSON.stringify(JSON.parse(bodies[bodies.length - 1]).projection), 5000); };
     const back = async () => { const r0 = await rev(); await T.locator('.intro-back').click(); await until(async () => (await rev()) === r0 + 1, 8000); await until(async () => bodies.length && JSON.stringify(await proj0()) === JSON.stringify(JSON.parse(bodies[bodies.length - 1]).projection), 5000); };
-    const label2 = async () => (await T.locator('.intro-next').innerText()).trim();
+    const label2 = async () => (await T.locator('.intro-next').innerText()).replace(/\u00a0/g, ' ').trim();
     return { SID, P, rev, proj0, check, next, back, label2 };
   }
 

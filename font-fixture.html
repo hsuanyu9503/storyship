@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>字體試排畫面</title>
+  <link rel="stylesheet" href="css/app.css">
+  <style>body { margin: 0; background: #fbfaf6; } .fx-teacher { padding: 16px; max-width: 900px; }</style>
+</head>
+<body>
+<!-- 字體試排用的固定畫面（本機預覽用，不會發布到網站）。網址：font-fixture.html?screen=<畫面>&font=kai|default
+     畫面：clues2（投影：千尋的三條線索）、names（投影：兩部作品的名字比較＋命名提問）、reveal2（投影：公布千尋）、
+           card04（學生：《動物方城市》故事卡背面）、teacher（教師端 01 操作按鈕） -->
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  if (q.get('font') === 'kai') document.documentElement.classList.add('font-kai');
+  const screen = q.get('screen') || 'clues2';
+  const P = await import('./js/lib/projection.js');
+  const { renderProjection } = await import('./js/lib/render-projection.js');
+  const { h } = await import('./js/lib/dom.js');
+  const INTRO = await (await fetch('docs/intro-source.json')).json();
+  const CARDS = await (await fetch('docs/story-cards-source.json')).json();
+  const stories = INTRO.stories.map((s, i) => ({ title: s.title, reveal_text: s.reveal_text, name_before: s.name_before, name_after: s.name_after,
+    image_url: i ? 'assets/intro/chihiro-1600.webp' : 'assets/intro/conan-1600.webp', image_alt: `《${s.title}》揭曉圖`, clues: s.clues }));
+  const text = { opening: INTRO.opening, compare_title: INTRO.compare_title, compare_prompts: INTRO.compare_prompts, naming_prompt: INTRO.naming_prompt, bridge_title: INTRO.bridge_title, bridge_text: INTRO.bridge_text };
+  const seq = [P.introInitial()]; for (let s = seq[0]; (s = P.introNext(stories, s, text));) seq.push(s);
+  const proj = (st) => { const w = h('div.stage-wrap'); w.append(renderProjection({ projection: P.introProjection(stories, st, text), status: 'active' }, { showQr: false })); document.body.replaceChildren(w); };
+  if (screen === 'clues2') proj(seq[9]);
+  else if (screen === 'reveal2') proj(seq[10]);
+  else if (screen === 'names') proj(seq[12]);
+  else if (screen === 'card04') {
+    const { openStoryReader } = await import('./js/lib/story.js');
+    const c = CARDS[3];
+    const r = openStoryReader({ id: 'c4', title: c.title, detail: c.paragraphs.join('\n'), elements: c.elements, image_url: `assets/stories/story-${c.no}.webp`, image_alt: `《${c.title}》故事情境圖` }, { no: c.no });
+    r.flip('back');
+  } else if (screen === 'teacher') {
+    // 教師端 01 面板的按鈕（與教師主控台相同的元素與樣式；文字為「公布作品」那一步）
+    document.body.replaceChildren(h('div.fx-teacher', h('section.card.panel',
+      h('h2', '01｜走進故事世界', h('small.muted', '　建議 5 分鐘')),
+      h('div.intro-ctl', h('p.intro-now', '投影目前：', h('b', '神祕故事二：已顯示 3 / 3 條線索')),
+        h('div.intro-btns', h('button.intro-back', { type: 'button' }, '← 上一步'), h('button.primary.big.intro-next', { type: 'button' }, '公布作品 →')),
+        h('p.muted.small', '每按一次只前進一步；作品名稱、名字與作品圖只在按「公布作品」後投影。鍵盤或簡報筆：→／PageDown 下一步、←／PageUp 上一步。'),
+        h('div.row', h('button', { type: 'button' }, '略過，直接進入下一環節：分類任務啟動 →'))),
+      h('nav.steps', ['課前連線準備', '走進故事世界', '分類任務啟動', '我的故事分類', '故事找朋友：小組共作', '分類成果大公開', '認識小說的五種類型', '小小故事分類師'].map((n, i) =>
+        h('button.step' + (i === 1 ? '.current' : ''), h('span.step-id', String(i).padStart(2, '0')), h('span.step-name', n)))))));
+  }
+  document.documentElement.dataset.ready = '1';
+</script>
+</body>
+</html>

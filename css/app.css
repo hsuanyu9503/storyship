@@ -624,7 +624,7 @@ html.font-kai body, html.font-kai .reader.sr, html.font-kai button, html.font-ka
    瀏覽器不支援時照原本方式換行，不影響內容。 */
 p, li, .st-clue2-body, .st-clue-recap span, .st-reveal2-desc, .st-ic-prompt, .st-intro-opening, .st-lead, .s-lead, .sr-reading p, .intro-now { text-wrap: pretty; }
 h1, h2, h3, button, .btn, .st-title, .st-sub, .st-prompt, .sr-title, .sc-title, .st-clue2-label, .st-ic-title, .st-reveal2-title, .st-chip, .fsr-msg, .sr-foot > span, .bd-hint { text-wrap: balance; }
-/* 名字變化：姓名不拆開；箭頭跟著新名字（「工藤新一」／「→ 江戶川柯南」），不單獨一行 */
+/* 名字變化：姓名不拆開；箭頭跟著新名字（「舊名」／「→ 新名」），不單獨一行 */
 .st-names .st-nm { white-space: nowrap; }
 /* 短的介面文字（按鈕、標題、狀態列、提示）：只在標點與空白處換行（例如「略過，／直接進入下一環節：／分類任務啟動 →」），
    不在詞中間斷開；真的放不下時才任意斷行（overflow-wrap: anywhere），不會溢出。段落仍逐字換行。 */

@@ -36,7 +36,7 @@ export function introSources(url) {
   const m = /^(assets\/intro\/[a-z0-9-]+)-1600\.webp$/.exec(url || '');
   return m ? [{ url: `${m[1]}-960.webp`, w: 960 }, { url, w: 1600 }] : null;
 }
-// 名字變化：兩個姓名各自不拆開，箭頭與新名字放在一起（換行時是「工藤新一」／「→ 江戶川柯南」）
+// 名字變化：兩個姓名各自不拆開，箭頭與新名字放在一起（換行時是「舊名」／「→ 新名」）
 const names = (s) => h('div.st-names', h('span.st-nm', s.name_before), ' ',
   h('span.st-nm', h('span.st-arrow', { 'aria-label': '改名為' }, '→'), '\u00a0', s.name_after));
 const introVisual = (url, alt) => visualBox(url, alt, { slot: 'landscape', sources: introSources(url) });
