@@ -288,6 +288,19 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
 .s-card-img { height: 110px; width: 100%; }
 .s-card-title { font-weight: 700; font-size: 1.15rem; } .s-card-sum { color: var(--muted); font-size: .95rem; }
 body.focus-mode { overscroll-behavior: none; }
+/* 學生退出全螢幕時的提示（js/student/fullscreen.js）：浮在目前活動畫面上，不重畫、不搶焦點 */
+.fsr-box { position: fixed; z-index: 1000; inset: auto 0 auto 0; top: 12px; margin: 0 auto; width: min(560px, calc(100vw - 24px));
+  padding: 0; border: 3px solid #b0702a; border-radius: 16px; background: #fff8ec; color: #3b2a12; box-shadow: 0 10px 32px rgba(0,0,0,.28); overflow: visible; }
+.fsr-box[hidden] { display: none; }
+.fsr-box:popover-open { display: block; }
+.fsr-inner { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px 18px; text-align: center; }
+.fsr-msg { margin: 0; font-size: 1.3rem; font-weight: 800; line-height: 1.45; text-wrap: balance; }
+.fsr-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+/* 選擇器加上 .fsr-box：提示放進閱讀卡（.sr）時，不被閱讀卡的按鈕樣式覆蓋 */
+.fsr-box .fsr-msg { font-family: inherit; }
+.fsr-box button.fsr-btn { font-size: 1.35rem; min-height: 56px; min-width: 220px; padding: .5em 1.4em; border-radius: 12px; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); font-weight: 700; }
+.fsr-box button.fsr-continue { font-size: 1.1rem; min-height: 56px; min-width: 140px; padding: .5em 1.2em; border-radius: 12px; background: #fff; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
+.fsr-btn:focus-visible, .fsr-continue:focus-visible { outline: 3px solid #b0702a; outline-offset: 3px; }
 body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 
 /* ---------- Phase 2：分類工作區（個人分類；Phase 3 小組共作共用） ---------- */

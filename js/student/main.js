@@ -4,6 +4,7 @@ import { createSync } from '../lib/sync.js';
 import { h, mount, confirmDialog } from '../lib/dom.js';
 import { STUDENT_VIEW, STUDENT_TEXT, TEXT } from '../lib/phases.js';
 import { createPersonal } from './personal.js';
+import { enterFullscreen } from './fullscreen.js';
 import { createGroup } from './group.js';
 
 const root = document.getElementById('app');
@@ -196,11 +197,9 @@ function renderState(sessionId, token, st) {
 
 async function enterExplore() {
   explore = true;
-  const el = document.documentElement;
-  try {
-    if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' });
-    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-  } catch { /* 不支援時使用網站專注模式即可 */ }
+  // 請求全螢幕；不支援或被拒絕時顯示說明（js/student/fullscreen.js），網站專注模式照常啟用，學生可繼續活動。
+  // 之後學生退出全螢幕時，會出現「請回到全螢幕，繼續活動」與「回到全螢幕」按鈕（不重畫活動畫面）。
+  await enterFullscreen();
   lastKey = '';
   sync?.refresh();
 }
