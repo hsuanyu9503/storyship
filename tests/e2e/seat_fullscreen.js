@@ -156,8 +156,14 @@ const covered = (p) => p.evaluate(() => {
     ok(await A.evaluate(() => document.querySelector('.bd-cat .bd-name:not([hidden])')?.value) === '魔大法', '分類名稱已保存在畫面上「魔大法」');
 
     // ======================================================================
-    // 3. 打字中退出全螢幕（模擬裝置在文字輸入時退出）：不立即擋住，打完字後才顯示遮罩；返回後繼續輸入
+    // 3. 打字中退出全螢幕（模擬 iPad：叫出鍵盤／打字時由系統退出）：不立即擋住；
+    //    完成輸入的那一下操作（點其他地方、按 Enter）直接重新進入全螢幕，不出現遮罩；
+    //    不是由使用者操作離開欄位（例如系統收起鍵盤）時才顯示遮罩
     // ======================================================================
+    await A.evaluate(() => { window.__overlayEver = 0; new MutationObserver(() => { if (document.querySelector('dialog.fsx')?.open) window.__overlayEver++; })
+      .observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['open'] }); });
+    const overlayEver = () => A.evaluate(() => window.__overlayEver);
+    const resetEver = () => A.evaluate(() => { window.__overlayEver = 0; });
     await A.locator('.bd-add:not([hidden])').tap(); await sleep(600);
     await A.locator('.bd-cat .bd-name:visible').nth(1).tap();
     await ime('ㄕㄨˇ', '鼠');
@@ -167,18 +173,34 @@ const covered = (p) => p.evaluate(() => {
     await ime('ㄅㄠˇ', '寶');
     s = await st(A); ok(s.value === '鼠寶' && s.caret === 2 && !s.overlay, `繼續輸入不被打斷：「${s.value}」，游標 ${s.caret}`);
     await A.screenshot({ path: path.join(SHOTS, 'typing-exit-note-1024x768.png') });
-    await A.locator('.bd-hint, .bd-col-title').first().tap();   // 點其他地方（離開欄位、收起鍵盤）
-    ok(await until(async () => (await st(A)).overlay), '離開欄位後：顯示黑色遮罩');
+    await A.locator('.bd-hint, .bd-col-title').first().tap();   // 點其他地方（完成輸入、收起鍵盤）
+    ok(await until(async () => (await st(A)).inFs), '完成輸入（點其他地方）：自動回到全螢幕');
+    s = await st(A); ok(!s.overlay && !s.note && await overlayEver() === 0, '完成輸入時沒有出現黑色遮罩，小提示也收起');
+    // 按 Enter 完成分類名稱
+    await A.locator('.bd-cat .bd-name:visible').nth(1).tap(); await A.keyboard.press('End');
+    await A.evaluate(() => document.exitFullscreen()); await sleep(300);
+    await ime('ㄓ', '之');
+    await A.keyboard.press('Enter');
+    ok(await until(async () => (await st(A)).inFs), '打字中退出後按 Enter 完成：自動回到全螢幕');
+    ok(await overlayEver() === 0, '按 Enter 完成時也沒有出現遮罩');
+    // 從分類名稱移到共同特色以外的另一個欄位（03 只有名稱欄位）：不是使用者操作離開（系統收起鍵盤）→ 顯示遮罩
+    await A.locator('.bd-cat .bd-name:visible').first().tap(); await A.keyboard.press('End');
+    await A.evaluate(() => document.exitFullscreen()); await sleep(300);
+    await ime('ㄨㄤˊ', '王');
+    // 模擬系統自行收起鍵盤（不是學生的操作）：Chromium 的使用者操作授權約 5 秒後失效；Playwright 的 evaluate 會帶使用者操作，
+    // 所以等待期間不呼叫 evaluate，最後以 CDP（userGesture: false）讓欄位失去焦點
+    await sleep(5500);
+    const noAct = await cdp.send('Runtime.evaluate', { expression: 'navigator.userActivation ? navigator.userActivation.isActive : false', userGesture: false, returnByValue: true });
+    ok(noAct.result.value === false, '此時沒有使用者操作授權');
+    await cdp.send('Runtime.evaluate', { expression: 'document.activeElement.blur()', userGesture: false });
+    ok(await until(async () => (await st(A)).overlay), '不是由使用者操作離開欄位：顯示黑色遮罩');
     ok(await covered(A), '遮罩是不透明黑色，覆蓋整個可視區域（四角、上下都點到遮罩）');
     s = await st(A); ok(s.msg === '請回到全螢幕，繼續活動' && s.btn === '回到全螢幕' && !s.err && !s.alt, `遮罩只有「${s.msg}」與按鈕「${s.btn}」`);
     await A.locator('.fsx-btn').tap();
     ok(await until(async () => { const x = await st(A); return x.inFs && !x.overlay; }), '按「回到全螢幕」：回到全螢幕、遮罩消失');
-    ok(await A.evaluate(() => [...document.querySelectorAll('.bd-cat .bd-name:not([hidden])')].map((i) => i.value).join('|')) === '魔大法|鼠寶', '返回後兩個分類名稱都在（「魔大法」「鼠寶」）');
-    // 返回後再進入欄位完成輸入
-    await A.locator('.bd-cat .bd-name:visible').nth(1).tap(); await A.keyboard.press('End'); await ime('ㄓ', '之'); await A.keyboard.press('Enter'); await sleep(900);
-    s = await st(A); ok(s.inFs && !s.overlay, '返回後再編輯並完成輸入：仍在全螢幕');
-    ok(await until(async () => JSON.stringify((await pg.query("select data from public.personal_boards pb join public.participants p on p.id = pb.participant_id where p.session_id = $1 and p.seat_no = 12", [SID])).rows[0].data.categories.map((c) => c.name)) === '["魔大法","鼠寶之"]'),
-      '伺服器已保存分類名稱「魔大法」「鼠寶之」');
+    ok(await A.evaluate(() => [...document.querySelectorAll('.bd-cat .bd-name:not([hidden])')].map((i) => i.value).join('|')) === '魔大法王|鼠寶之', '返回後兩個分類名稱都在（「魔大法王」「鼠寶之」）');
+    ok(await until(async () => JSON.stringify((await pg.query("select data from public.personal_boards pb join public.participants p on p.id = pb.participant_id where p.session_id = $1 and p.seat_no = 12", [SID])).rows[0].data.categories.map((c) => c.name)) === '["魔大法王","鼠寶之"]'),
+      '伺服器已保存分類名稱「魔大法王」「鼠寶之」');
 
     // ======================================================================
     // 4. 開著故事卡（翻到背面）退出 → 遮罩在閱讀卡之上、背景不能操作 → 鍵盤返回；連續三次（鍵盤、觸控、滑鼠）
@@ -227,14 +249,13 @@ const covered = (p) => p.evaluate(() => {
     await A.locator('.bd-cat .bd-name:visible').first().tap(); await ime('ㄑㄧˊ', '奇'); await ime('ㄏㄨㄢˋ', '幻');
     await A.locator('.bd-cat .bd-reason:visible').first().tap(); await ime('ㄧㄡˇ', '有'); await ime('ㄇㄛˊ', '魔'); await A.keyboard.press('ArrowLeft'); await ime('ㄅㄨˋ', '不');
     s = await st(A); ok(s.inFs && !s.overlay && s.value === '有不魔' && s.caret === 2, `04 共同特色：組字、選字、修改「${s.value}」游標 ${s.caret}，仍在全螢幕`);
-    // 編輯共同特色時退出 → 繼續輸入 → 離開後遮罩 → 返回 → 文字保留
+    // 編輯共同特色時退出 → 繼續輸入 → 點其他地方完成 → 自動回到全螢幕 → 文字保留
     await A.evaluate(() => document.exitFullscreen()); await sleep(300);
     s = await st(A); ok(!s.overlay && s.note && s.value === '有不魔', '04 編輯共同特色時退出：不擋住輸入');
     await A.keyboard.press('End'); await ime('ㄈㄚˇ', '法');
+    await resetEver();
     await A.locator('.bd-col-title:visible').first().tap();
-    ok(await until(async () => (await st(A)).overlay), '04 離開欄位後顯示遮罩');
-    await A.locator('.fsx-btn').tap();
-    await until(async () => (await st(A)).inFs);
+    ok(await until(async () => (await st(A)).inFs) && await overlayEver() === 0, '04 完成輸入（點其他地方）：自動回到全螢幕，沒有出現遮罩');
     const g04 = await A.evaluate(() => ({ name: document.querySelector('.bd-cat .bd-name:not([hidden])')?.value || document.querySelector('.bd-cat .bd-name-ro')?.textContent, reason: document.querySelector('.bd-cat .bd-reason:not([hidden])')?.value || document.querySelector('.bd-cat .bd-reason-ro')?.textContent }));
     ok(g04.name === '奇幻' && g04.reason === '有不魔法', `04 返回後：分類名稱「${g04.name}」、共同特色「${g04.reason}」`);
     ok(await until(async () => (await pg.query("select reason from public.group_categories gc join public.groups g on g.id = gc.group_id where g.session_id = $1 and g.number = 2 and gc.name = '奇幻'", [SID])).rows[0]?.reason === '有不魔法'),

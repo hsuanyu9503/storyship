@@ -12,9 +12,11 @@
 //   遮罩只建立一次，事件監聽只註冊一次；退出／返回反覆操作不會累積。
 //   遮罩不重畫下面的活動畫面：作答、卡片位置、閱讀卡翻面狀態、尚未送出的文字都保留；資料同步照常進行，返回後看到最新環節。
 //
-// 正在打字時退出全螢幕（某些裝置在文字輸入時由系統退出全螢幕）：
+// 正在打字時退出全螢幕（iPad：iPadOS 的 Safari 與 Chrome 都用 WebKit，叫出虛擬鍵盤或打字時由系統退出全螢幕）：
 //   焦點在文字欄位時不立即顯示遮罩（避免打斷注音組字、讓輸入框失去焦點，形成「回到全螢幕 → 一打字又被退出」的循環），
-//   改在畫面上方顯示不擋操作的小提示「完成輸入後，請回到全螢幕」；學生離開文字欄位後才顯示黑色遮罩。
+//   改在畫面上方顯示不擋操作的小提示「完成輸入後，請回到全螢幕」。
+//   學生完成輸入的那一下操作（點其他地方、按 Enter 離開分類名稱）本身就是使用者操作：在那個事件中直接重新請求全螢幕，
+//   成功就不顯示遮罩；不是由使用者操作離開（例如系統收起鍵盤）或瀏覽器拒絕時，才顯示黑色遮罩與「回到全螢幕」。
 //
 // 請求失敗：遮罩顯示原因，按鈕可重試；連續失敗兩次後，另外提供「先以一般畫面繼續」（並請學生舉手告訴老師），避免被困住。
 // 瀏覽器完全不支援全螢幕（例如 iPhone 的 Safari）：不顯示遮罩，只在畫面上方顯示說明，活動以一般畫面進行。
@@ -41,6 +43,7 @@ let failed = 0;         // 連續請求失敗次數
 let busy = false;
 let deferred = false;   // 打字中退出：遮罩延後到離開文字欄位
 let reraising = false;
+let autoPending = false;   // 完成輸入時自動重新進入全螢幕的請求進行中（期間不顯示遮罩）
 let dlg = null; let msgEl = null; let errEl = null; let btn = null; let alt = null;
 let note = null; let info = null; let infoShown = false;
 
@@ -60,9 +63,9 @@ export function requestFs() {
 }
 
 // 文字欄位（分類名稱、共同特色、活動代碼、座號…）是否正在編輯
-function editing() {
-  const a = doc.activeElement;
-  if (!a || a === doc.body || (dlg && dlg.contains(a)) || (note && note.contains(a))) return false;
+function editing() { return isEditable(doc.activeElement); }
+function isEditable(a) {
+  if (!a || a.nodeType !== 1 || a === doc.body || (dlg && dlg.contains(a)) || (note && note.contains(a))) return false;
   if (a.isContentEditable) return true;
   if (a.tagName === 'TEXTAREA') return !a.readOnly && !a.disabled;
   if (a.tagName === 'INPUT') return !a.readOnly && !a.disabled && !/^(button|submit|reset|checkbox|radio|range|color|file|image)$/i.test(a.type);
@@ -119,6 +122,7 @@ export function update() {
     if (dlg.open) { reraising = true; try { dlg.close(); } finally { reraising = false; } }
     return;
   }
+  if (autoPending) return;   // 自動重新進入中：等結果
   // 不在全螢幕：正在打字時延後，否則顯示遮罩
   if (!dlg.open && editing()) { deferred = true; note.hidden = false; return; }
   deferred = false; note.hidden = true;
@@ -155,8 +159,30 @@ export function setRequired(on, { failedRequest = false } = {}) {
   update();
 }
 
-// 打字中延後的遮罩：離開文字欄位後顯示
-doc.addEventListener('focusout', () => { if (deferred) setTimeout(() => { if (deferred && !editing()) { deferred = false; update(); } }, 0); }, true);
+// 完成輸入：在離開欄位的使用者操作中同步請求全螢幕（瀏覽器只在使用者操作當下允許）；失敗才顯示遮罩
+function autoReturn() {
+  if (!deferred || autoPending) return;
+  deferred = false; note.hidden = true; autoPending = true;
+  const done = () => { autoPending = false; update(); };
+  requestFs().then(done, done);
+}
+// 離開文字欄位：移到另一個文字欄位（例如分類名稱 → 共同特色）時繼續延後
+doc.addEventListener('focusout', (e) => {
+  if (!deferred || autoPending) return;
+  if (isEditable(e.relatedTarget)) return;
+  autoReturn();
+}, true);
+// iPad 點空白處不一定會讓輸入框失去焦點：打字中延後時，點文字欄位以外的地方就視為完成輸入（先讓欄位失去焦點、照常儲存）
+function onTapOutside(e) {
+  if (!deferred || autoPending) return;
+  const t = e.target;
+  if (isEditable(t) || (t.closest && t.closest('.fsx-note, label'))) return;
+  const a = doc.activeElement;
+  if (a && a !== doc.body && isEditable(a)) a.blur();   // 觸發 focusout → autoReturn（同一個使用者操作中）
+  if (deferred) autoReturn();
+}
+doc.addEventListener('pointerup', onTapOutside, true);
+doc.addEventListener('touchend', onTapOutside, true);
 doc.addEventListener('fullscreenchange', update);
 doc.addEventListener('webkitfullscreenchange', update);
 addEventListener('pageshow', update);
