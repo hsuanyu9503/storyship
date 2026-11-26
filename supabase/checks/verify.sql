@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 故事找朋友｜升級後檢查（唯讀，可隨時執行；不修改任何資料）
--- 在 Supabase SQL Editor 執行後，每一列（17 列）的 ok 都應為 true。
+-- 在 Supabase SQL Editor 執行後，每一列（18 列）的 ok 都應為 true。
 -- =====================================================================
 with
 tables as (
@@ -88,4 +88,14 @@ select '17. Phase 4 函式存在且只開放給教師（含 06 伺服器產生�
        and not has_function_privilege('anon', 'app.compare_build(uuid,jsonb)', 'execute')
        and to_regprocedure('app.genre_build(uuid,jsonb,jsonb)') is not null
        and not has_function_privilege('anon', 'app.genre_build(uuid,jsonb,jsonb)', 'execute')
-       and not has_function_privilege('authenticated', 'app.genre_build(uuid,jsonb,jsonb)', 'execute');
+       and not has_function_privilege('authenticated', 'app.genre_build(uuid,jsonb,jsonb)', 'execute')
+union all
+select '18. 學生座號：欄位與範圍檢查存在、加入函式可帶座號（學生可執行、舊三參數版本已移除）、教師可讀座號',
+       exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'participants' and column_name = 'seat_no')
+       and exists (select 1 from pg_constraint where conname = 'participants_seat_no_range')
+       and to_regprocedure('public.student_join(text,text,int,int)') is not null
+       and to_regprocedure('public.student_join(text,text,int)') is null
+       and has_function_privilege('anon', 'public.student_join(text,text,int,int)', 'execute')
+       and has_column_privilege('authenticated', 'public.participants', 'seat_no', 'select')
+       and not has_column_privilege('anon', 'public.participants', 'seat_no', 'select')
+       and not has_column_privilege('authenticated', 'public.participants', 'seat_no', 'update');

@@ -1,10 +1,11 @@
 // C｜學生端（平板）：極簡、只呈現當下任務所需資訊。
 import { makeClient, configured, rpc, errorText } from '../lib/api.js';
 import { createSync } from '../lib/sync.js';
-import { h, mount, confirmDialog } from '../lib/dom.js';
+import { h, mount, confirmDialog, toast } from '../lib/dom.js';
 import { STUDENT_VIEW, STUDENT_TEXT, TEXT } from '../lib/phases.js';
 import { createPersonal } from './personal.js';
-import { enterFullscreen } from './fullscreen.js';
+import { beginFullscreen, setRequired, fsSupported } from './fullscreen.js';
+import { parseSeat, seatText } from '../lib/seat.js';
 import { createGroup } from './group.js';
 
 const root = document.getElementById('app');
@@ -15,7 +16,8 @@ let sync = null;
 let lastKey = '';
 let personal = null;   // 03 個人分類工作區（保持同一個實體，避免同步時打斷操作）
 let group = null;      // 04 小組共作工作區（同上；換組或換場次時才重建）
-let explore = false;   // 學生已按下「進入探索模式」
+let explore = false;   // 學生已加入（探索模式：網站專注模式＋全螢幕）
+let joinForm = { seat: '', group: null };   // 選組畫面的輸入（加入失敗或格式錯誤時保留）
 
 // ---------- 匿名、可恢復的裝置識別 ----------
 // 每個活動代碼一組隨機憑證，存在此裝置的 localStorage；伺服器只保存其雜湊值。
@@ -56,37 +58,74 @@ function askCode(errMsg) {
     errMsg ? h('p.s-error', errMsg) : null));
 }
 
+// ---------- 選擇組別：輸入座號 → 選擇組別 → 加入 → 確認加入（同一次點擊請求全螢幕） ----------
+const seatKey = (c) => 'sf.seat.' + c;
 async function chooseGroup(note) {
+  setRequired(false);
   let info;
   try { info = await rpc(client, 'student_lookup', { p_code: code }); }
-  catch (e) { return screenMsg('無法連線', errorText(e), h('button.s-big', { onclick: start }, '重試')); }
+  catch (e) { return screenMsg('無法連線', errorText(e), h('button.s-big', { onclick: () => chooseGroup(note) }, '重試')); }
   if (!info) return askCode('找不到這個活動代碼，或活動已結束。');
   if (!info.join_open) {
     return screenMsg(info.title, '老師目前暫停加入，請舉手告訴老師。', h('button.s-big', { onclick: () => chooseGroup() }, '重新檢查'));
   }
-  shell(h('div.s-center',
+  if (!joinForm.seat) joinForm.seat = storeGet(seatKey(code)) || '';
+  const seatErr = h('p.s-error.s-field-error', { id: 'seat-error', hidden: true, role: 'alert' });
+  const groupErr = h('p.s-error.s-field-error', { id: 'group-error', hidden: true, role: 'alert' });
+  const seat = h('input.s-input.s-seat', { id: 'seat', type: 'text', inputmode: 'numeric', pattern: '[0-9]*', maxlength: 3,
+    enterkeyhint: 'next', autocomplete: 'off', placeholder: '例如 5', value: joinForm.seat, 'aria-describedby': 'seat-error', 'aria-required': 'true' });
+  const showErr = (el, input, text) => { el.textContent = text || ''; el.hidden = !text; if (input) input.setAttribute('aria-invalid', text ? 'true' : 'false'); };
+  seat.addEventListener('input', () => { joinForm.seat = seat.value; if (!seatErr.hidden && !parseSeat(seat.value).error) showErr(seatErr, seat, ''); });
+  seat.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); seat.blur(); } });
+  const groupBtns = info.groups.map((g) => {
+    const full = g.capacity != null && g.count >= g.capacity;
+    const b = h('button.s-group', { type: 'button', disabled: full, 'aria-pressed': String(joinForm.group === g.number),
+      onclick: () => { joinForm.group = g.number; groupBtns.forEach((x) => x.setAttribute('aria-pressed', String(x === b))); showErr(groupErr, null, ''); } },
+      h('span.n', g.number), h('span.l', full ? '已滿' : g.name));
+    if (full && joinForm.group === g.number) joinForm.group = null;
+    return b;
+  });
+  const submit = () => {
+    const r = parseSeat(seat.value);
+    const g = info.groups.find((x) => x.number === joinForm.group);
+    showErr(seatErr, seat, r.error || '');
+    showErr(groupErr, null, g ? '' : '請選擇你的組別。');
+    if (r.error) { seat.focus(); return; }
+    if (!g) return;
+    joinGroup(g, r.value);
+  };
+  shell(h('div.s-center.s-join',
     h('div.s-logo', info.title),
-    h('h1', '請選擇你的組別'),
-    note ? h('p.s-error', note) : null,
-    h('div.s-groups', info.groups.map((g) => {
-      const full = g.capacity != null && g.count >= g.capacity;
-      return h('button.s-group', { type: 'button', disabled: full, onclick: () => joinGroup(g) },
-        h('span.n', g.number), h('span.l', full ? '已滿' : g.name));
-    }))));
+    h('h1', '輸入座號，選擇組別'),
+    note ? h('p.s-error', { role: 'alert' }, note) : null,
+    h('div.s-field', h('label.s-label', { for: 'seat' }, '座號（必填）'), seat, seatErr),
+    h('div.s-field', h('span.s-label', '組別'), h('div.s-groups', { role: 'group', 'aria-label': '組別' }, groupBtns), groupErr),
+    h('button.primary.s-big.s-join-go', { type: 'button', onclick: submit }, '加入')));
 }
 
-async function joinGroup(g) {
-  const ok = await confirmDialog({ title: `確認加入${g.name}？`, body: '加入後如需換組，請告訴老師。',
-    buttons: [{ label: '重新選擇', value: false }, { label: '確認加入', value: true, primary: true }] });
+async function joinGroup(g, seatNo) {
+  let fs = null;
+  // 「確認加入」的點擊事件中同步請求全螢幕（不等網路回應，避免失去瀏覽器要求的使用者操作授權）
+  const ok = await confirmDialog({ title: `確認加入${g.name}？`, body: `座號 ${seatNo} 號。加入後如需換組，請告訴老師。`,
+    buttons: [{ label: '重新選擇', value: false },
+              { label: '確認加入', value: true, primary: true, onSelect: () => { fs = beginFullscreen(); } }] });
   if (!ok) return;
+  storeSet(seatKey(code), String(seatNo));
+  let r;
   try {
-    const r = await rpc(client, 'student_join', { p_code: code, p_token: tokenFor(code), p_group_number: g.number });
-    storeSet(sessionKey(code), { session_id: r.session_id });
-    runSession(r.session_id);
-    sync.ping('roster');   // 通知教師端與投影端更新人數
+    r = await rpc(client, 'student_join', { p_code: code, p_token: tokenFor(code), p_group_number: g.number, p_seat_no: seatNo });
   } catch (e) {
-    chooseGroup(errorText(e));
+    await fs;
+    return chooseGroup(errorText(e));   // 座號與已選組別保留在 joinForm
   }
+  const fsr = await fs;
+  storeSet(sessionKey(code), { session_id: r.session_id });
+  if (r.resumed && r.seat_no != null && Number(r.seat_no) !== seatNo) toast(`這台裝置已用 ${r.seat_no} 號加入，沿用原本的座號與組別。`, 'info', 5000);
+  joinForm = { seat: '', group: null };
+  // 加入成功：之後只要不在全螢幕就顯示黑色遮罩；全螢幕請求被拒絕時，遮罩直接顯示原因並可重試
+  setRequired(true, { failedRequest: Boolean(fsr && !fsr.ok && !fsr.unsupported) });
+  runSession(r.session_id);
+  sync.ping('roster');   // 通知教師端與投影端更新人數
 }
 
 async function start() {
@@ -112,6 +151,8 @@ async function start() {
 // ---------- 上課中：依教師控制的環節顯示畫面 ----------
 function runSession(sessionId) {
   sync?.stop();
+  explore = true;
+  setRequired(true);   // 已加入（含重新整理、斷線重連後恢復）：退出全螢幕時顯示黑色遮罩
   const token = tokenFor(code);
   sync = createSync({
     client,
@@ -120,7 +161,7 @@ function runSession(sessionId) {
     onStatus: ({ online }) => { netBar.hidden = online; },
     onData: (st, err) => {
       if (err) {
-        if (err.code === 'NOT_JOINED') { try { localStorage.removeItem(sessionKey(code)); } catch { /* 隱私模式 */ } sync.stop(); return chooseGroup(); }
+        if (err.code === 'NOT_JOINED') { try { localStorage.removeItem(sessionKey(code)); } catch { /* 隱私模式 */ } sync.stop(); explore = false; return chooseGroup(); }
         return;
       }
       renderState(sessionId, token, st);
@@ -130,12 +171,13 @@ function runSession(sessionId) {
 
 function renderState(sessionId, token, st) {
   if (st.removed) {
+    setRequired(false);   // 已被移出：不再要求全螢幕
     if (personal) { personal.destroy(); personal = null; }
     if (group) { group.destroy(); group = null; }
     const k = 'removed';
     if (lastKey === k) return; lastKey = k;
     return screenMsg('已離開小組', '老師已將你移出小組。', st.join_open
-      ? h('button.s-big.primary', { onclick: () => { sync.stop(); lastKey = ''; chooseGroup(); } }, '重新選擇組別') : null);
+      ? h('button.s-big.primary', { onclick: () => { sync.stop(); lastKey = ''; explore = false; chooseGroup(); } }, '重新選擇組別') : null);
   }
   document.body.classList.toggle('focus-mode', Boolean(st.state.focus_mode) || explore);
   const view = st.session.status === 'ended' ? 'end' : STUDENT_VIEW[st.state.phase] || 'watch';
@@ -170,13 +212,13 @@ function renderState(sessionId, token, st) {
     return;
   }
   // 只有影響畫面的欄位改變才重畫，避免打斷學生操作
-  const key = [view, st.state.phase, st.me.group_number, st.me.seat_label, st.state.focus_mode, explore,
+  const key = [view, st.state.phase, st.me.group_number, st.me.seat_label, st.me.seat_no, st.state.focus_mode, explore,
                st.can.personal_edit, st.can.group_edit, st.state.editing_paused].join('|');
   if (key === lastKey) return;
   lastKey = key;
 
   const header = h('header.s-header', h('span.s-title', TEXT.activity),
-    h('span.s-me', `${st.me.group_name}・${st.me.seat_label}`));
+    h('span.s-me', `${st.me.group_name}・${seatText(st.me)}`));
 
   if (view === 'wait') return shell(header, h('div.s-center', h('div.s-check', '✓'), h('h1', '已加入' + st.me.group_name), h('p.s-lead', STUDENT_TEXT.wait)));
   if (view === 'end') return shell(header, h('div.s-center', h('h1', TEXT.endLine1), h('p.s-lead', TEXT.endLine2)));
@@ -188,20 +230,9 @@ function renderState(sessionId, token, st) {
     return shell(header, h('div.s-center',
       h('h1', TEXT.activity),
       h('p.s-lead', `你在${st.me.group_name}，已完成加入。`),
-      explore
-        ? h('p.s-lead.muted', '已進入探索模式，請等待老師開始。')
-        : h('button.primary.s-big', { type: 'button', onclick: enterExplore }, '進入探索模式'),
+      h('p.s-lead.muted', fsSupported() ? '已進入探索模式（全螢幕），請等待老師開始。' : '這台裝置不支援全螢幕，已以一般畫面進入探索模式，請等待老師開始。'),
       h('p.s-note', '平板建議橫向使用')));
   }
-}
-
-async function enterExplore() {
-  explore = true;
-  // 請求全螢幕；不支援或被拒絕時顯示說明（js/student/fullscreen.js），網站專注模式照常啟用，學生可繼續活動。
-  // 之後學生退出全螢幕時，會出現「請回到全螢幕，繼續活動」與「回到全螢幕」按鈕（不重畫活動畫面）。
-  await enterFullscreen();
-  lastKey = '';
-  sync?.refresh();
 }
 
 start();

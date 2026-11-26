@@ -31,7 +31,7 @@ grant select on public.teachers, public.content_sets, public.story_cards, public
                 public.personal_boards, public.personal_snapshots, public.group_categories,
                 public.group_placements, public.group_snapshots
    to authenticated;
-grant select (id, session_id, group_id, seat_label, status, joined_at, last_seen_at)
+grant select (id, session_id, group_id, seat_label, seat_no, status, joined_at, last_seen_at)
    on public.participants to authenticated;
 
 -- 重建政策（可重複執行）
@@ -85,7 +85,7 @@ grant execute on function app.is_session_teacher(uuid) to authenticated;
 grant execute on function
   public.projector_state(uuid, text),
   public.student_lookup(text),
-  public.student_join(text, text, int),
+  public.student_join(text, text, int, int),
   public.student_state(uuid, text),
   public.student_cards(uuid, text),
   public.student_personal(uuid, text),

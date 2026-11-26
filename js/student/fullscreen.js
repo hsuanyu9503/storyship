@@ -1,114 +1,176 @@
-// 學生端：退出全螢幕時顯示「請回到全螢幕，繼續活動」與大按鈕「回到全螢幕」。
-//   * 依瀏覽器實際的全螢幕狀態（document.fullscreenElement／webkitFullscreenElement 與 fullscreenchange 事件）判斷。
-//   * 提示是獨立的浮層（支援時放在 top layer：popover），不重畫下面的活動畫面，所以作答、分組、卡片位置、翻面狀態都保留；
-//     閱讀卡（<dialog>）開著時也會顯示在它上面。
-//   * 只有學生曾經進入全螢幕（或按下「進入探索模式」）後才會出現；成功回到全螢幕後消失，再次退出會再出現。
-//   * 瀏覽器拒絕或裝置不支援：提示改為說明文字與「繼續活動」，按下後收起，學生照常進行（之後若又進入再退出，提示會再出現）。
-//   * 不搶走焦點（學生可能正在輸入分類名稱）；按鈕可用觸控、滑鼠、鍵盤（Tab 到按鈕後 Enter／空白鍵）操作。
+// 學生端全螢幕（2026-11-26 改版）
+//
+// 何時要求全螢幕：學生按「確認加入」組別時，在同一次點擊中請求全螢幕（瀏覽器要求由使用者操作觸發，不能等網路回應後再請求）。
+// 加入成功後（含重新整理、斷線重連後恢復身分），只要瀏覽器實際不在全螢幕，就顯示全黑遮罩：
+//   「請回到全螢幕，繼續活動」＋按鈕「回到全螢幕」。只有實際進入全螢幕（document.fullscreenElement）後遮罩才消失。
+//
+// 判斷依據：只看瀏覽器的全螢幕狀態（fullscreenElement／webkitFullscreenElement 與 fullscreenchange 事件）。
+//   視窗大小改變、虛擬鍵盤出現、頁面暫時失去焦點都不會被當成退出全螢幕（不監聽 resize、blur、visualViewport）。
+//
+// 遮罩：<dialog> 以 showModal() 開啟，放在瀏覽器最上層（top layer），蓋住活動、卡片、導覽與其他對話框（例如閱讀卡）；
+//   其餘頁面成為 inert，滑鼠、觸控、鍵盤都無法操作背景。Esc 不能關閉；被其他對話框蓋過或被瀏覽器關閉時會重新放到最上層。
+//   遮罩只建立一次，事件監聽只註冊一次；退出／返回反覆操作不會累積。
+//   遮罩不重畫下面的活動畫面：作答、卡片位置、閱讀卡翻面狀態、尚未送出的文字都保留；資料同步照常進行，返回後看到最新環節。
+//
+// 正在打字時退出全螢幕（某些裝置在文字輸入時由系統退出全螢幕）：
+//   焦點在文字欄位時不立即顯示遮罩（避免打斷注音組字、讓輸入框失去焦點，形成「回到全螢幕 → 一打字又被退出」的循環），
+//   改在畫面上方顯示不擋操作的小提示「完成輸入後，請回到全螢幕」；學生離開文字欄位後才顯示黑色遮罩。
+//
+// 請求失敗：遮罩顯示原因，按鈕可重試；連續失敗兩次後，另外提供「先以一般畫面繼續」（並請學生舉手告訴老師），避免被困住。
+// 瀏覽器完全不支援全螢幕（例如 iPhone 的 Safari）：不顯示遮罩，只在畫面上方顯示說明，活動以一般畫面進行。
 import { h } from '../lib/dom.js';
 
 const doc = document;
 const fsElement = () => doc.fullscreenElement || doc.webkitFullscreenElement || null;
-export const fullscreenSupported = () => {
+export const fsActive = () => Boolean(fsElement());
+export function fsSupported() {
   const el = doc.documentElement;
-  return Boolean((el.requestFullscreen || el.webkitRequestFullscreen) && (doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled ?? true));
-};
+  const api = Boolean(el.requestFullscreen || el.webkitRequestFullscreen);
+  const enabled = doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled;
+  return api && enabled !== false;
+}
 
-let wanted = false;        // 學生已選擇使用全螢幕（按過「進入探索模式」）
-let dismissed = false;     // 請求失敗後學生選擇「繼續活動」
-let box = null; let msg = null; let btn = null; let cont = null;
+const MSG = '請回到全螢幕，繼續活動';
+const DENIED = '瀏覽器沒有允許全螢幕，請再按一次「回到全螢幕」。';
+const DENIED_AGAIN = '仍無法進入全螢幕。請舉手告訴老師；需要時可先以一般畫面繼續。';
+const UNSUPPORTED = '這台裝置的瀏覽器不支援全螢幕，活動將以一般畫面進行。';
+
+let required = false;   // 學生已加入活動：退出全螢幕時要顯示遮罩
+let bypass = false;     // 連續失敗後學生選擇「先以一般畫面繼續」（下次成功進入全螢幕後恢復）
+let failed = 0;         // 連續請求失敗次數
 let busy = false;
+let deferred = false;   // 打字中退出：遮罩延後到離開文字欄位
+let reraising = false;
+let dlg = null; let msgEl = null; let errEl = null; let btn = null; let alt = null;
+let note = null; let info = null; let infoShown = false;
 
-export async function requestFs() {
-  const el = doc.documentElement;
-  if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' });
-  else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
-  else throw new Error('UNSUPPORTED');
+// 在使用者操作（點擊、按鍵）的事件處理中「同步」呼叫：瀏覽器只在使用者操作當下允許進入全螢幕
+export function requestFs() {
+  try {
+    const el = doc.documentElement;
+    if (fsElement()) return Promise.resolve();
+    if (!fsSupported()) return Promise.reject(Object.assign(new Error('UNSUPPORTED'), { code: 'UNSUPPORTED' }));
+    const r = el.requestFullscreen ? el.requestFullscreen({ navigationUI: 'hide' }) : el.webkitRequestFullscreen();
+    return Promise.resolve(r).then(() => {
+      // 部分瀏覽器（舊版 webkit）沒有回傳 Promise：以 fullscreenchange 為準，稍候確認
+      if (fsElement()) return;
+      return new Promise((ok, no) => setTimeout(() => (fsElement() ? ok() : no(new Error('DENIED'))), 400));
+    });
+  } catch (e) { return Promise.reject(e); }
+}
+
+// 文字欄位（分類名稱、共同特色、活動代碼、座號…）是否正在編輯
+function editing() {
+  const a = doc.activeElement;
+  if (!a || a === doc.body || (dlg && dlg.contains(a)) || (note && note.contains(a))) return false;
+  if (a.isContentEditable) return true;
+  if (a.tagName === 'TEXTAREA') return !a.readOnly && !a.disabled;
+  if (a.tagName === 'INPUT') return !a.readOnly && !a.disabled && !/^(button|submit|reset|checkbox|radio|range|color|file|image)$/i.test(a.type);
+  return false;
 }
 
 function build() {
-  msg = h('p.fsr-msg', '請回到全螢幕，繼續活動');
-  btn = h('button.primary.fsr-btn', { type: 'button', onclick: onReturn }, '回到全螢幕');
-  cont = h('button.fsr-continue', { type: 'button', hidden: true, onclick: () => { dismissed = true; update(); } }, '繼續活動');
-  box = h('div.fsr-box', { role: 'alert', 'aria-live': 'assertive' }, h('div.fsr-inner', msg, h('div.fsr-actions', btn, cont)));
-  if ('popover' in HTMLElement.prototype) box.setAttribute('popover', 'manual');
-  doc.body.append(box);
+  if (dlg) return;
+  msgEl = h('p.fsx-msg', MSG);
+  errEl = h('p.fsx-err', { hidden: true });
+  btn = h('button.fsx-btn', { type: 'button', onclick: onReturn }, '回到全螢幕');
+  alt = h('button.fsx-alt', { type: 'button', hidden: true, onclick: () => { bypass = true; update(); } }, '先以一般畫面繼續');
+  dlg = h('dialog.fsx', { 'aria-labelledby': 'fsx-msg' }, msgEl, btn, errEl, alt);
+  msgEl.id = 'fsx-msg';
+  dlg.addEventListener('cancel', (e) => e.preventDefault());           // Esc 不能關閉遮罩
+  dlg.addEventListener('close', () => { if (!reraising && shouldBlock()) queueMicrotask(open); });   // 被瀏覽器關閉時重新開啟
+  note = h('div.fsx-note', { role: 'status', hidden: true }, h('span', '完成輸入後，請回到全螢幕'),
+    h('button', { type: 'button', onclick: onReturn }, '回到全螢幕'));
+  info = h('div.fsx-info', { role: 'status', hidden: true }, h('span', UNSUPPORTED),
+    h('button', { type: 'button', 'aria-label': '關閉說明', onclick: () => { info.hidden = true; } }, '知道了'));
+  doc.body.append(dlg, note, info);
 }
-// 放置位置：有開啟中的強制回應對話框（例如閱讀卡 showModal）時，頁面其他部分都是 inert（不能點），
-// 所以提示要放進該對話框裡；沒有時放在 body，並用 popover 放到最上層。
-const modalOpen = () => [...doc.querySelectorAll('dialog[open]')].filter((d) => { try { return d.matches(':modal'); } catch { return true; } }).pop() || null;
-function place() {
-  const host = modalOpen() || doc.body;
-  if (box.parentNode !== host) {
-    if (box.hasAttribute('popover')) { try { if (box.matches(':popover-open')) box.hidePopover(); } catch { /* 忽略 */ } }
-    host.append(box);
-  }
-  if (box.hasAttribute('popover')) {   // 放進對話框時也用 popover 顯示（在對話框之上；身為對話框的子元素，所以不是 inert）
-    try { if (box.matches(':popover-open')) box.hidePopover(); box.showPopover(); } catch { /* 不支援時以 z-index 顯示 */ }
-  }
+
+const shouldBlock = () => required && !bypass && fsSupported() && !fsActive() && !deferred;
+
+function open() {
+  if (!dlg) build();
+  if (!shouldBlock()) return;
+  if (dlg.open) return;
+  try { dlg.showModal(); } catch { dlg.setAttribute('open', ''); }
 }
-function show() {
-  if (!box) build();
-  box.hidden = false;
-  place();
-  doc.body.classList.add('fsr-out');
+// 其他對話框（確認視窗、閱讀卡）在遮罩之後開啟：把遮罩重新放到最上層（關閉後再以 showModal 開啟，成為最上層的對話框）
+function raise() {
+  if (!dlg?.open) return;
+  reraising = true;
+  try { dlg.close(); } finally { reraising = false; }
+  open();
 }
-function hide() {
-  if (!box) return;
-  if (box.hasAttribute('popover')) { try { if (box.matches(':popover-open')) box.hidePopover(); } catch { /* 忽略 */ } }
-  box.hidden = true;
-  doc.body.classList.remove('fsr-out');
-}
-function setFailed(text) {
-  if (!box) build();
-  msg.textContent = text;
-  btn.textContent = '再試一次';
-  cont.hidden = false;
-}
-function setNormal() {
-  if (!box) return;
-  msg.textContent = '請回到全螢幕，繼續活動';
-  btn.textContent = '回到全螢幕';
-  cont.hidden = true;
+
+function setError(text) {
+  errEl.textContent = text || '';
+  errEl.hidden = !text;
+  alt.hidden = failed < 2;
 }
 
 export function update() {
-  if (fsElement()) { dismissed = false; setNormal(); return hide(); }
-  if (!wanted || dismissed) return hide();
-  show();
+  if (!dlg) build();
+  if (fsActive()) { failed = 0; bypass = false; deferred = false; setError(''); }
+  // 不支援全螢幕：不擋畫面，只顯示說明
+  if (!required || fsSupported()) info.hidden = true;
+  else if (!infoShown) { info.hidden = false; infoShown = true; }   // 只顯示一次；按「知道了」收起
+  if (!required || bypass || !fsSupported() || fsActive()) {
+    deferred = false; note.hidden = true;
+    if (dlg.open) { reraising = true; try { dlg.close(); } finally { reraising = false; } }
+    return;
+  }
+  // 不在全螢幕：正在打字時延後，否則顯示遮罩
+  if (!dlg.open && editing()) { deferred = true; note.hidden = false; return; }
+  deferred = false; note.hidden = true;
+  open();
 }
 
 async function onReturn() {
   if (busy) return;
   busy = true; btn.disabled = true;
+  const p = requestFs();   // 同步請求（在點擊事件中）
   try {
-    if (!fullscreenSupported()) throw new Error('UNSUPPORTED');
-    await requestFs();
-    // 成功與否以 fullscreenchange 為準；部分瀏覽器 resolve 時狀態已更新
-    setTimeout(update, 0);
+    await p;
+    failed = 0;
   } catch (e) {
-    setFailed(fullscreenSupported()
-      ? '瀏覽器沒有允許全螢幕。可以再試一次，或先繼續活動。'
-      : '這台裝置或瀏覽器不支援全螢幕，請直接繼續活動。');
-    show();
+    failed += 1;
+    setError(fsSupported() ? (failed >= 2 ? DENIED_AGAIN : DENIED) : '');
   } finally {
     busy = false; btn.disabled = false;
+    deferred = false;
+    update();
   }
 }
 
-// 學生按下「進入探索模式」：請求全螢幕；失敗時顯示說明，但學生仍可繼續活動
-export async function enterFullscreen() {
-  wanted = true; dismissed = false;
-  if (!fullscreenSupported()) { setFailed('這台裝置或瀏覽器不支援全螢幕，請直接繼續活動。'); show(); return false; }
-  try { await requestFs(); setNormal(); setTimeout(update, 0); return true; }
-  catch { setFailed('瀏覽器沒有允許全螢幕。可以再試一次，或先繼續活動。'); show(); return false; }
+// 「確認加入」的點擊事件中同步呼叫：開始請求全螢幕，回傳結果（不會丟出錯誤）
+export function beginFullscreen() {
+  return requestFs().then(() => ({ ok: true }), (e) => ({ ok: false, unsupported: !fsSupported(), error: e }));
 }
 
-// 提示顯示中，對話框開啟或關閉（閱讀卡關閉時連同裡面的提示一起移除）→ 重新放置
-new MutationObserver(() => {
-  if (box && !box.hidden && wanted && !dismissed && !fsElement()) { box.hidden = false; place(); }
-}).observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
+// 學生加入活動（或恢復身分）後開啟；離開活動（被移出、回到選組）時關閉
+export function setRequired(on, { failedRequest = false } = {}) {
+  required = Boolean(on);
+  if (!required) { bypass = false; failed = 0; }
+  if (failedRequest && fsSupported() && !fsActive()) { failed = Math.max(failed, 1); if (!dlg) build(); setError(DENIED); }
+  update();
+}
+
+// 打字中延後的遮罩：離開文字欄位後顯示
+doc.addEventListener('focusout', () => { if (deferred) setTimeout(() => { if (deferred && !editing()) { deferred = false; update(); } }, 0); }, true);
 doc.addEventListener('fullscreenchange', update);
 doc.addEventListener('webkitfullscreenchange', update);
-// 測試用：目前提示的狀態
-export const fsState = () => ({ wanted, dismissed, shown: Boolean(box && !box.hidden), inFullscreen: Boolean(fsElement()) });
+addEventListener('pageshow', update);
+// 遮罩顯示中又開啟其他對話框：把遮罩放回最上層
+//   只看這次變動中「新開啟」的其他對話框（DOM 順序不等於最上層的順序，不能用掃描判斷）
+const isOpenDialog = (n) => n.nodeType === 1 && n !== dlg && ((n.tagName === 'DIALOG' && n.open) || n.querySelector?.('dialog[open]'));
+new MutationObserver((records) => {
+  if (!dlg?.open) return;
+  if (records.some((r) => (r.type === 'attributes' && r.target !== dlg && r.target.tagName === 'DIALOG' && r.target.open)
+                       || (r.type === 'childList' && [...r.addedNodes].some(isOpenDialog)))) raise();
+})
+  .observe(doc.documentElement, { subtree: true, attributes: true, attributeFilter: ['open'], childList: true });
+
+// 測試用：目前狀態
+export const fsState = () => ({ required, bypass, failed, deferred, inFullscreen: fsActive(), supported: fsSupported(),
+  shown: Boolean(dlg?.open), note: Boolean(note && !note.hidden), info: Boolean(info && !info.hidden),
+  error: errEl && !errEl.hidden ? errEl.textContent : '', alt: Boolean(alt && !alt.hidden) });

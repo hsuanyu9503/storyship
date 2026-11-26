@@ -47,6 +47,7 @@ export const ERROR_TEXT = {
   SESSION_ENDED: '活動已結束。',
   JOIN_CLOSED: '老師已暫停加入，請舉手告訴老師。',
   GROUP_FULL: '這一組人數已滿，請選擇其他組別或洽老師。',
+  INVALID_SEAT: '座號請輸入 1～999 的整數，例如 5。',
   NO_GROUP: '組別不存在。',
   INVALID_TOKEN: '裝置識別錯誤，請重新整理頁面。',
   STALE: '資料已被更新，已重新載入最新內容。',

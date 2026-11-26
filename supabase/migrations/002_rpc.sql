@@ -49,6 +49,19 @@ alter table public.intro_stories add column if not exists name_after text;
 alter table public.intro_stories add column if not exists image_alt text;
 alter table public.content_sets add column if not exists intro_text jsonb;
 
+-- 學生座號（2026-11-26）：學生在選擇組別時輸入，教師端以「5 號」顯示（可重複執行）
+--   participants.seat_no：1～999 的整數；舊資料為 null（教師端顯示「未填座號」與加入順序）。
+--   學生識別仍是 token_hash（裝置憑證），座號只用於呈現；學生只能經由 student_join 寫入自己的座號。
+--   seat_label 保留為組內加入順序（舊版顯示用），不再當作座號。
+alter table public.participants add column if not exists seat_no int;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'participants_seat_no_range') then
+    alter table public.participants add constraint participants_seat_no_range check (seat_no is null or seat_no between 1 and 999);
+  end if;
+end $$;
+-- student_join 增加 p_seat_no 參數：先移除舊的三參數版本（新版第四個參數有預設值，舊版前端以三個參數呼叫仍可使用）
+drop function if exists public.student_join(text, text, int);
+
 -- 故事卡正式教材（2026-11）：「值得留意的故事元素」（可重複執行；舊資料為空陣列，背面不顯示元素區）
 --   story_cards.elements：字串陣列，依文件順序，例如 ["神奇零食","實現願望"]；只是閱讀提示，不代表分類答案
 alter table public.story_cards add column if not exists elements jsonb not null default '[]'::jsonb;
@@ -357,11 +370,13 @@ begin
                  order by g.number) from public.groups g where g.session_id = s.id));
 end $$;
 
-create or replace function public.student_join(p_code text, p_token text, p_group_number int)
+create or replace function public.student_join(p_code text, p_token text, p_group_number int, p_seat_no int default null)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare s public.sessions; g public.groups; p public.participants; v_hash text; v_count int;
 begin
   v_hash := app.hash_token(p_token);
+  -- 座號：1～999 的整數（學生端必填；未帶座號的舊版前端仍可加入，教師端顯示「未填座號」）
+  if p_seat_no is not null and (p_seat_no < 1 or p_seat_no > 999) then raise exception 'INVALID_SEAT'; end if;
   select * into s from public.sessions where join_code = upper(btrim(p_code)) and status = 'active';
   if not found then raise exception 'SESSION_NOT_FOUND'; end if;
   -- 與其他學生寫入相同的鎖定順序：先 session_state（SHARE）再 groups。
@@ -370,9 +385,13 @@ begin
   select * into s from public.sessions where id = s.id and status = 'active';
   if not found then raise exception 'SESSION_NOT_FOUND'; end if;
   select * into p from public.participants where session_id = s.id and token_hash = v_hash;
-  -- 已加入的裝置：直接恢復原本身分（換組需由教師調整）
+  -- 已加入的裝置：直接恢復原本身分（換組需由教師調整）。座號維持原本的；舊資料沒有座號時才補上這次輸入的座號
   if found and p.status = 'active' and p.group_id is not null then
-    return jsonb_build_object('session_id', s.id, 'resumed', true);
+    if p.seat_no is null and p_seat_no is not null then
+      update public.participants set seat_no = p_seat_no where id = p.id returning * into p;
+    end if;
+    return jsonb_build_object('session_id', s.id, 'resumed', true, 'seat_no', p.seat_no,
+                              'group_number', (select number from public.groups where id = p.group_id));
   end if;
   if not s.join_open then raise exception 'JOIN_CLOSED'; end if;
   select * into g from public.groups where session_id = s.id and number = p_group_number for update;
@@ -384,14 +403,15 @@ begin
   end if;
   update public.groups set seat_seq = seat_seq + 1 where id = g.id returning * into g;
   if p.id is null then
-    insert into public.participants (session_id, group_id, token_hash, seat_label)
-    values (s.id, g.id, v_hash, g.seat_seq || ' 號') returning * into p;
+    insert into public.participants (session_id, group_id, token_hash, seat_label, seat_no)
+    values (s.id, g.id, v_hash, g.seat_seq || ' 號', p_seat_no) returning * into p;
     insert into public.personal_boards (participant_id, session_id) values (p.id, s.id);
   else
+    -- 被移出後重新加入：用這次輸入的座號（沒有輸入時保留原本的）
     update public.participants set group_id = g.id, status = 'active', seat_label = g.seat_seq || ' 號',
-           last_seen_at = now() where id = p.id;
+           seat_no = coalesce(p_seat_no, seat_no), last_seen_at = now() where id = p.id returning * into p;
   end if;
-  return jsonb_build_object('session_id', s.id, 'resumed', false);
+  return jsonb_build_object('session_id', s.id, 'resumed', false, 'seat_no', p.seat_no, 'group_number', g.number);
 end $$;
 
 -- 學生的課堂狀態與可用權限（三端同步的學生側入口；同時更新在線時間）
@@ -418,7 +438,7 @@ begin
     'session', jsonb_build_object('id', s.id, 'title', s.title, 'status', s.status),
     'state', jsonb_build_object('phase', st.phase, 'sub', st.sub, 'rev', st.rev,
                                 'focus_mode', st.focus_mode, 'editing_paused', st.editing_paused),
-    'me', jsonb_build_object('group_number', g.number, 'group_name', g.name, 'seat_label', p.seat_label),
+    'me', jsonb_build_object('group_number', g.number, 'group_name', g.name, 'seat_label', p.seat_label, 'seat_no', p.seat_no),
     'group', jsonb_build_object('status', g.status, 'board_rev', g.board_rev),
     'personal', jsonb_build_object('rev', coalesce(b.rev, 0), 'submitted', b.submitted_at is not null,
                                    'locked', v_locked),

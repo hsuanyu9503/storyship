@@ -1,4 +1,5 @@
 // 三端端對端測試：教師主控、投影、兩台學生平板（不同瀏覽器 context＝不同裝置）
+const { assumeFullscreen, joinGroup } = require('./student_join');
 const { chromium } = require('playwright');
 const { Pool } = require('pg');
 // 直接讀資料庫，只用來檢查（不寫入）
@@ -160,14 +161,14 @@ async function inViewport(page, sel) {
     const students = [];
     for (const [i, grp] of [[1, 1], [2, 1], [3, 2]]) {
       const sc = await ctx(browser, { viewport: { width: 1180, height: 820 }, hasTouch: true });
+      await sc.addInitScript(assumeFullscreen);
       await sc.addInitScript(() => { window.__ev = []; for (const t of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture', 'click'])
         document.addEventListener(t, (e) => window.__ev.push(t + ':' + (e.target.className || e.target.tagName)), true); });
       const s = await sc.newPage();
       s.on('pageerror', (e) => errors.push('student' + i + ': ' + e.message));
       await s.goto(join);
-      await waitText(s, '請選擇你的組別');
-      await s.click(`.s-group:has(.n:text-is("${grp}"))`);
-      await s.click('dialog button:has-text("確認加入")');
+      await waitText(s, '輸入座號，選擇組別');
+      await joinGroup(s, grp);
       await waitText(s, '已加入第 ' + grp + ' 組');
       students.push({ page: s, grp });
     }
@@ -206,10 +207,8 @@ async function inViewport(page, sel) {
     await teacher.click('button:has-text("直接進入下一環節")');
     await waitText(proj, '仔細觀察故事的共同特色');
     ok(!/奇幻|偵探|武俠|離奇事件與謎團|不同於現實的時空/.test(await text(proj)), '02：不提前顯示五種小說類型');
-    await waitText(students[0].page, '進入探索模式');
-    await students[0].page.click('text=進入探索模式');
     await waitText(students[0].page, '已進入探索模式');
-    ok(true, '02：學生進入探索模式（不支援全螢幕時仍可參與）');
+    ok(true, '02：學生加入時已進入探索模式（全螢幕）');
     await teacher.click('text=投影重新顯示 QR Code（補加入）');
     await waitText(proj, '各組加入狀態');
     ok(true, '02：教師可重新投影 QR Code');
@@ -539,12 +538,12 @@ async function inViewport(page, sel) {
 
     // 補加入的第四位組員（第 1 組、04 才加入）：沒有個人快照，仍可共作
     const s3c = await ctx(browser, { viewport: { width: 1180, height: 820 }, hasTouch: true });
+    await s3c.addInitScript(assumeFullscreen);
     const s3 = await s3c.newPage();
     s3.on('pageerror', (e) => errors.push('student4: ' + e.message));
     await s3.goto(join);
-    await waitText(s3, '請選擇你的組別');
-    await s3.click('.s-group:has(.n:text-is("1"))');
-    await s3.click('dialog button:has-text("確認加入")');
+    await waitText(s3, '輸入座號，選擇組別');
+    await joinGroup(s3, 1);
     await waitText(s3, '第 1 組｜共同分類');
     await s3.click('.gw-toggle');
     await waitText(s3, '尚無個人分類紀錄');

@@ -149,7 +149,7 @@ python3 -m http.server 8080
 * 每個場次預設在「結束」後保留 30 天（`sessions.retention_days`，1～365）。
 * 場次列表的「清除已過保留期限的場次」會刪除自己已過期的場次。
 * 「刪除」會立即永久刪除該場次與所有學生成果。
-* 網站不蒐集學生姓名；資料庫只存裝置憑證的雜湊值與「第 N 組・N 號」。
+* 網站不蒐集學生姓名；資料庫只存裝置憑證的雜湊值、組別與學生輸入的座號（例如「12 號」）。
 
 ---
 
@@ -159,7 +159,11 @@ python3 -m http.server 8080
 
 在 SQL Editor 貼上並執行 **`supabase/upgrade/upgrade.sql`** 一個檔案即可（內容＝002 → 003，包在單一交易中，最後自動執行檢查）。
 執行中任何錯誤都會全部回復，不會留下半套狀態；可重複執行；不刪除、不修改任何既有資料。
-結果表格的 `ok` 都應為 `true`（17 列）。檢查在 commit 之後執行：若出現 `false`，升級已完成、不會自動回復，請處理後重新執行。修改 002／003 之後，請執行 `bash supabase/upgrade/build.sh` 重新產生此檔。
+結果表格的 `ok` 都應為 `true`（18 列）。檢查在 commit 之後執行：若出現 `false`，升級已完成、不會自動回復，請處理後重新執行。修改 002／003 之後，請執行 `bash supabase/upgrade/build.sh` 重新產生此檔。
+
+### 學生座號（2026-11-26）
+
+先執行 `supabase/upgrade/upgrade.sql`（18 列都應為 `true`），再更新網站並讓所有裝置重新整理。新增 `participants.seat_no`（舊資料為 null）與四參數的 `student_join`；舊版網站仍相容。詳見 [`SEAT_FULLSCREEN.md`](SEAT_FULLSCREEN.md)。
 
 ### 從 Phase 3 升級到 Phase 4
 

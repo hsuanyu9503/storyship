@@ -3,7 +3,7 @@
 -- 由 supabase/upgrade/build.sh 產生，請勿手動修改。內容：002_rpc.sql → 003_security.sql → checks/verify.sql
 -- 002、003 包在單一交易中：執行中任何錯誤都會全部回復，資料庫維持升級前的狀態。
 -- 最後的檢查在 commit 之後執行（唯讀）：若出現 false，升級本身已完成，不會自動回復；請依說明處理後重新執行本檔。
--- 不刪除、不修改任何既有資料。執行完畢後，結果表格的 ok 都應為 true（17 列）。
+-- 不刪除、不修改任何既有資料。執行完畢後，結果表格的 ok 都應為 true（18 列）。
 -- =====================================================================
 begin;
 
@@ -57,6 +57,19 @@ alter table public.intro_stories add column if not exists name_before text;
 alter table public.intro_stories add column if not exists name_after text;
 alter table public.intro_stories add column if not exists image_alt text;
 alter table public.content_sets add column if not exists intro_text jsonb;
+
+-- 學生座號（2026-11-26）：學生在選擇組別時輸入，教師端以「5 號」顯示（可重複執行）
+--   participants.seat_no：1～999 的整數；舊資料為 null（教師端顯示「未填座號」與加入順序）。
+--   學生識別仍是 token_hash（裝置憑證），座號只用於呈現；學生只能經由 student_join 寫入自己的座號。
+--   seat_label 保留為組內加入順序（舊版顯示用），不再當作座號。
+alter table public.participants add column if not exists seat_no int;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'participants_seat_no_range') then
+    alter table public.participants add constraint participants_seat_no_range check (seat_no is null or seat_no between 1 and 999);
+  end if;
+end $$;
+-- student_join 增加 p_seat_no 參數：先移除舊的三參數版本（新版第四個參數有預設值，舊版前端以三個參數呼叫仍可使用）
+drop function if exists public.student_join(text, text, int);
 
 -- 故事卡正式教材（2026-11）：「值得留意的故事元素」（可重複執行；舊資料為空陣列，背面不顯示元素區）
 --   story_cards.elements：字串陣列，依文件順序，例如 ["神奇零食","實現願望"]；只是閱讀提示，不代表分類答案
@@ -366,11 +379,13 @@ begin
                  order by g.number) from public.groups g where g.session_id = s.id));
 end $$;
 
-create or replace function public.student_join(p_code text, p_token text, p_group_number int)
+create or replace function public.student_join(p_code text, p_token text, p_group_number int, p_seat_no int default null)
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare s public.sessions; g public.groups; p public.participants; v_hash text; v_count int;
 begin
   v_hash := app.hash_token(p_token);
+  -- 座號：1～999 的整數（學生端必填；未帶座號的舊版前端仍可加入，教師端顯示「未填座號」）
+  if p_seat_no is not null and (p_seat_no < 1 or p_seat_no > 999) then raise exception 'INVALID_SEAT'; end if;
   select * into s from public.sessions where join_code = upper(btrim(p_code)) and status = 'active';
   if not found then raise exception 'SESSION_NOT_FOUND'; end if;
   -- 與其他學生寫入相同的鎖定順序：先 session_state（SHARE）再 groups。
@@ -379,9 +394,13 @@ begin
   select * into s from public.sessions where id = s.id and status = 'active';
   if not found then raise exception 'SESSION_NOT_FOUND'; end if;
   select * into p from public.participants where session_id = s.id and token_hash = v_hash;
-  -- 已加入的裝置：直接恢復原本身分（換組需由教師調整）
+  -- 已加入的裝置：直接恢復原本身分（換組需由教師調整）。座號維持原本的；舊資料沒有座號時才補上這次輸入的座號
   if found and p.status = 'active' and p.group_id is not null then
-    return jsonb_build_object('session_id', s.id, 'resumed', true);
+    if p.seat_no is null and p_seat_no is not null then
+      update public.participants set seat_no = p_seat_no where id = p.id returning * into p;
+    end if;
+    return jsonb_build_object('session_id', s.id, 'resumed', true, 'seat_no', p.seat_no,
+                              'group_number', (select number from public.groups where id = p.group_id));
   end if;
   if not s.join_open then raise exception 'JOIN_CLOSED'; end if;
   select * into g from public.groups where session_id = s.id and number = p_group_number for update;
@@ -393,14 +412,15 @@ begin
   end if;
   update public.groups set seat_seq = seat_seq + 1 where id = g.id returning * into g;
   if p.id is null then
-    insert into public.participants (session_id, group_id, token_hash, seat_label)
-    values (s.id, g.id, v_hash, g.seat_seq || ' 號') returning * into p;
+    insert into public.participants (session_id, group_id, token_hash, seat_label, seat_no)
+    values (s.id, g.id, v_hash, g.seat_seq || ' 號', p_seat_no) returning * into p;
     insert into public.personal_boards (participant_id, session_id) values (p.id, s.id);
   else
+    -- 被移出後重新加入：用這次輸入的座號（沒有輸入時保留原本的）
     update public.participants set group_id = g.id, status = 'active', seat_label = g.seat_seq || ' 號',
-           last_seen_at = now() where id = p.id;
+           seat_no = coalesce(p_seat_no, seat_no), last_seen_at = now() where id = p.id returning * into p;
   end if;
-  return jsonb_build_object('session_id', s.id, 'resumed', false);
+  return jsonb_build_object('session_id', s.id, 'resumed', false, 'seat_no', p.seat_no, 'group_number', g.number);
 end $$;
 
 -- 學生的課堂狀態與可用權限（三端同步的學生側入口；同時更新在線時間）
@@ -427,7 +447,7 @@ begin
     'session', jsonb_build_object('id', s.id, 'title', s.title, 'status', s.status),
     'state', jsonb_build_object('phase', st.phase, 'sub', st.sub, 'rev', st.rev,
                                 'focus_mode', st.focus_mode, 'editing_paused', st.editing_paused),
-    'me', jsonb_build_object('group_number', g.number, 'group_name', g.name, 'seat_label', p.seat_label),
+    'me', jsonb_build_object('group_number', g.number, 'group_name', g.name, 'seat_label', p.seat_label, 'seat_no', p.seat_no),
     'group', jsonb_build_object('status', g.status, 'board_rev', g.board_rev),
     'personal', jsonb_build_object('rev', coalesce(b.rev, 0), 'submitted', b.submitted_at is not null,
                                    'locked', v_locked),
@@ -1408,7 +1428,7 @@ grant select on public.teachers, public.content_sets, public.story_cards, public
                 public.personal_boards, public.personal_snapshots, public.group_categories,
                 public.group_placements, public.group_snapshots
    to authenticated;
-grant select (id, session_id, group_id, seat_label, status, joined_at, last_seen_at)
+grant select (id, session_id, group_id, seat_label, seat_no, status, joined_at, last_seen_at)
    on public.participants to authenticated;
 
 -- 重建政策（可重複執行）
@@ -1462,7 +1482,7 @@ grant execute on function app.is_session_teacher(uuid) to authenticated;
 grant execute on function
   public.projector_state(uuid, text),
   public.student_lookup(text),
-  public.student_join(text, text, int),
+  public.student_join(text, text, int, int),
   public.student_state(uuid, text),
   public.student_cards(uuid, text),
   public.student_personal(uuid, text),
@@ -1505,7 +1525,7 @@ commit;
 
 -- =====================================================================
 -- 故事找朋友｜升級後檢查（唯讀，可隨時執行；不修改任何資料）
--- 在 Supabase SQL Editor 執行後，每一列（17 列）的 ok 都應為 true。
+-- 在 Supabase SQL Editor 執行後，每一列（18 列）的 ok 都應為 true。
 -- =====================================================================
 with
 tables as (
@@ -1593,4 +1613,14 @@ select '17. Phase 4 函式存在且只開放給教師（含 06 伺服器產生�
        and not has_function_privilege('anon', 'app.compare_build(uuid,jsonb)', 'execute')
        and to_regprocedure('app.genre_build(uuid,jsonb,jsonb)') is not null
        and not has_function_privilege('anon', 'app.genre_build(uuid,jsonb,jsonb)', 'execute')
-       and not has_function_privilege('authenticated', 'app.genre_build(uuid,jsonb,jsonb)', 'execute');
+       and not has_function_privilege('authenticated', 'app.genre_build(uuid,jsonb,jsonb)', 'execute')
+union all
+select '18. 學生座號：欄位與範圍檢查存在、加入函式可帶座號（學生可執行、舊三參數版本已移除）、教師可讀座號',
+       exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'participants' and column_name = 'seat_no')
+       and exists (select 1 from pg_constraint where conname = 'participants_seat_no_range')
+       and to_regprocedure('public.student_join(text,text,int,int)') is not null
+       and to_regprocedure('public.student_join(text,text,int)') is null
+       and has_function_privilege('anon', 'public.student_join(text,text,int,int)', 'execute')
+       and has_column_privilege('authenticated', 'public.participants', 'seat_no', 'select')
+       and not has_column_privilege('anon', 'public.participants', 'seat_no', 'select')
+       and not has_column_privilege('authenticated', 'public.participants', 'seat_no', 'update');

@@ -50,6 +50,7 @@ export function toast(msg, kind = 'info', ms = 3000) {
 }
 
 // 簡單確認對話框（Promise<boolean | string>）
+//   buttons[].onSelect：在按鈕的點擊事件中「同步」執行（例如請求全螢幕：瀏覽器只在使用者操作當下允許）
 export function confirmDialog({ title, body, buttons = [{ label: '取消', value: false }, { label: '確定', value: true, primary: true }] }) {
   return new Promise((resolve) => {
     const dlg = h('dialog.dialog',
@@ -57,7 +58,7 @@ export function confirmDialog({ title, body, buttons = [{ label: '取消', value
       body ? h('div.dialog-body', body) : null,
       h('div.dialog-actions', buttons.map((b) =>
         h('button' + (b.primary ? '.primary' : '') + (b.danger ? '.danger' : ''),
-          { type: 'button', onclick: () => { dlg.close(); dlg.remove(); resolve(b.value); } }, b.label))));
+          { type: 'button', onclick: () => { b.onSelect?.(); dlg.close(); dlg.remove(); resolve(b.value); } }, b.label))));
     dlg.addEventListener('cancel', () => { dlg.remove(); resolve(false); });
     document.body.append(dlg);
     dlg.showModal();

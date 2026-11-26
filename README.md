@@ -45,6 +45,7 @@
 * [`docs/TEACHER_CHECKLIST.md`](docs/TEACHER_CHECKLIST.md)：教師課前檢查表
 * [`docs/GENRE_MATERIALS.md`](docs/GENRE_MATERIALS.md)：小說類型教材（06／07 正式文字、圖片、教師補充、相容策略）
 * [`docs/REVIEW_HANDOFF_GENRE.md`](docs/REVIEW_HANDOFF_GENRE.md)：小說類型教材複檢交接
+* [`docs/SEAT_FULLSCREEN.md`](docs/SEAT_FULLSCREEN.md)：學生座號、確認加入後進入全螢幕、全黑遮罩、打字與全螢幕（原因、升級步驟、測試）
 * [`docs/FONT_AND_WRAP.md`](docs/FONT_AND_WRAP.md)：學生「回到全螢幕」、中文換行修正、全站標楷體（對照結果與套用方式）
 * [`docs/INTRO_UNIT.md`](docs/INTRO_UNIT.md)：第 01 環節「走進故事世界」（猜作品活動、文案、揭曉圖、老師操作、待確認事項）
 * [`docs/STORY_CARDS.md`](docs/STORY_CARDS.md)：第 03／04 環節的故事卡教材（八部作品、WebP 圖片、雙面閱讀卡、待確認事項）

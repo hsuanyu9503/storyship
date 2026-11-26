@@ -1,4 +1,5 @@
 // B｜教師主控端：控制教學環節、內容揭露與學生連線。
+import { seatText, bySeat } from '../lib/seat.js';
 import { makeClient, configured, rpc, errorText } from '../lib/api.js';
 import { createSync } from '../lib/sync.js';
 import { h, mount, toast, confirmDialog } from '../lib/dom.js';
@@ -189,12 +190,21 @@ export function teacherGuide(guide, open = false) {
     rows.map(([k, t]) => h('p', h('b', k + '：'), t)));
 }
 
+// 學生名單（含座號）。資料庫尚未升級（沒有 seat_no 欄位）時改讀舊欄位，教師端仍可使用，座號顯示為「未填座號」
+async function loadPeople(sessionId) {
+  const q = (cols) => client.from('participants').select(cols).eq('session_id', sessionId).order('joined_at');
+  const r = await q('id,group_id,seat_label,seat_no,status,joined_at,last_seen_at');
+  if (!r.error) return r;
+  const old = await q('id,group_id,seat_label,status,joined_at,last_seen_at');
+  return old.error ? r : old;
+}
+
 async function loadLive(sessionId) {
   const [pub, st, groups, people, boards, snaps] = await Promise.all([
     rpc(client, 'projector_state', { p_session: sessionId, p_key: null }),
     client.from('session_state').select('*').eq('session_id', sessionId).single(),
     client.from('groups').select('*, group_categories(*), group_placements(*)').eq('session_id', sessionId).order('number'),
-    client.from('participants').select('id,group_id,seat_label,status,joined_at,last_seen_at').eq('session_id', sessionId).order('joined_at'),
+    loadPeople(sessionId),
     client.from('personal_boards').select('participant_id,rev,updated_at,submitted_at,data').eq('session_id', sessionId),
     client.from('personal_snapshots').select('participant_id,is_complete,submitted,data,taken_at').eq('session_id', sessionId),
   ]);
@@ -205,7 +215,7 @@ async function loadLive(sessionId) {
   S.pub = pub;
   S.state = st.data;
   S.groups = groups.data;
-  S.people = people.data;
+  S.people = people.data.slice().sort(bySeat);
   S.personal = {
     boards: boards.data.length,
     submitted: boards.data.filter((b) => b.submitted_at).length,
@@ -312,7 +322,7 @@ function renderAll(force = false) {
   if (changed('head', [st.rev, S.session.status, S.session.join_open, S.sync?.status])) renderHead();
   if (changed('steps', [st.phase, S.session.status])) renderSteps();
   if (changed('panel', [st.rev, S.session.join_open, S.session.status, S.genrePreview,
-    S.groups.map((g) => [g.status, g.board_rev]), S.people.length, onlineCount(S.people), (S.groupSnaps || []).length,
+    S.groups.map((g) => [g.status, g.board_rev]), S.people.length, onlineCount(S.people), S.people.map((p) => [p.id, p.group_id, p.status, p.seat_no]), (S.groupSnaps || []).length,
     S.state.phase === '04' ? S.groups.map((g) => onlineCount(S.people.filter((p) => p.group_id === g.id))) : 0,
     S.personal.boards, S.personal.submitted, S.personal.digest, S.personal.snapshots, [...S.ppOpen],
     S.results?.key(), st.stage_ctl, st.disclosure, (S.groupSnaps || []).map((x) => x.id),
@@ -520,7 +530,8 @@ const PANELS = {
       h('p', `已連線：${onlineCount(S.people)} / ${active.length} 人`),
       h('div.ready-row', S.groups.map((g) => {
         const m = active.filter((p) => p.group_id === g.id);
-        return h('div.ready-cell' + (m.length ? '.ok' : ''), h('b', g.name), h('span', `${onlineCount(m)}/${m.length} 在線`));
+        return h('div.ready-cell' + (m.length ? '.ok' : ''), h('b', g.name), h('span', `${onlineCount(m)}/${m.length} 在線`),
+          m.length ? h('span.seats', m.map(seatText).join('、')) : null);
       })),
       h('div.btn-grid',
         onScreenQr
@@ -529,7 +540,7 @@ const PANELS = {
         h('button', { onclick: () => setFlags({ p_focus_mode: !S.state.focus_mode }) },
           S.state.focus_mode ? '關閉學生專注模式' : '開啟學生專注模式'),
         h('button.primary', { onclick: () => goPhase('03') }, '開放第三環節：我的故事分類\u00a0→')),
-      h('p.muted', '提醒：網頁無法遠端強制學生裝置全螢幕；學生按「進入探索模式」時會在支援的瀏覽器請求全螢幕，不支援時自動使用網站專注模式。'));
+      h('p.muted', '提醒：網頁無法遠端強制學生裝置全螢幕；學生按「確認加入」時會在支援的瀏覽器進入全螢幕，之後退出全螢幕會顯示黑色遮罩與「回到全螢幕」。不支援的裝置以一般畫面進行。'));
   },
 
   '03': () => panelPersonal(),
@@ -608,7 +619,7 @@ function fmtTime(t) {
 
 function viewBoard(r, group) {
   const cards = S.content.cards;
-  const v = createBoardView({ cards, title: `${group?.name || ''}・${r.p.seat_label} 的個人分類（僅教師可見，不會投影）`,
+  const v = createBoardView({ cards, title: `${group?.name || ''}・${seatText(r.p)} 的個人分類（僅教師可見，不會投影）`,
     readOnly: true, embedded: true });
   v.setData(r.data);
   if (r.snap) v.setNotice(h('div.bd-notice' + (r.snap.is_complete ? '.info' : ''),
@@ -661,7 +672,7 @@ function panelPersonal() {
           h('table.pp-people',
             h('thead', h('tr', h('th', '座號'), h('th', '連線'), h('th', '已分類'), h('th', '狀態'), h('th', '最後儲存'), h('th', ''))),
             h('tbody', gr.map((r) => h('tr',
-              h('td', r.p.seat_label),
+              h('td', seatText(r.p)),
               h('td', h('span.dot' + (isOnline(r.p) ? '.on' : '')), isOnline(r.p) ? ' 在線' : ' 離線'),
               h('td', h('span.pp-bar', h('span', { style: { width: (n ? r.placed / n * 100 : 0) + '%' } })), `${r.placed} / ${n}`),
               h('td', statusOf(r)),
@@ -744,7 +755,7 @@ function panelGroups() {
         h('td', x.used),
         h('td', `${x.reasons}/${x.used}`),
         h('td', x.g.status === 'open' ? h('span.tag', '編輯中') : x.g.status === 'submitted' ? h('span.tag.pub', '已提交') : h('span.tag.warn', '教師結束保存')),
-        h('td.gp-members', `${x.online}/${x.members.length} 在線`),
+        h('td.gp-members', `${x.online}/${x.members.length} 在線`, x.members.length ? h('span.seats', x.members.map(seatText).join('、')) : null),
         h('td.gp-actions',
           h('button.small', { type: 'button', onclick: () => viewGroup(x.g) }, '查看'),
           x.g.status !== 'open' && !ended ? h('button.small', { type: 'button', onclick: () => reopenGroup(x.g) }, '重新開放') : null))))),
@@ -756,7 +767,7 @@ function panelGroups() {
 // ----------------------------------------------------------------------
 let rosterKey = '';
 function renderRoster() {
-  const key = JSON.stringify([S.groups.map((g) => [g.id, g.capacity, g.name]), S.people.map((p) => [p.id, p.group_id, p.status, Math.floor((Date.now() - new Date(p.last_seen_at)) / ONLINE_MS)]),
+  const key = JSON.stringify([S.groups.map((g) => [g.id, g.capacity, g.name]), S.people.map((p) => [p.id, p.group_id, p.status, p.seat_no, Math.floor((Date.now() - new Date(p.last_seen_at)) / ONLINE_MS)]),
     S.personal.snapshots, S.personal.submitted]);
   if (key === rosterKey || S.els.roster.contains(document.activeElement)) return;
   rosterKey = key;
@@ -771,14 +782,14 @@ function renderRoster() {
         members.length === 0 ? h('p.muted.small', '尚無學生') :
         h('ul.members', members.map((p) => h('li',
           h('span.dot' + (now - new Date(p.last_seen_at) < ONLINE_MS ? '.on' : '')),
-          h('span.seat', p.seat_label),
+          h('span.seat', seatText(p)),
           S.personal.submittedSet?.has(p.id) ? h('span.tag.pub', '個人已提交') : null,
           S.personal.incomplete?.has(p.id) ? h('span.tag.warn', '個人未完成') : null,
           h('select.small', { onchange: async (e) => {
             try { await rpc(client, 'teacher_move_participant', { p_participant: p.id, p_group_number: Number(e.target.value) }); S.sync.ping('roster'); S.sync.refresh(); } catch (er) { toast(errorText(er), 'error'); }
           } }, S.groups.map((x) => h('option', { value: x.number, selected: x.id === g.id }, '移到' + x.name))),
           h('button.small', { onclick: async () => {
-            if (!await confirmDialog({ title: `移出 ${p.seat_label}？`, body: '該裝置的資料會保留；學生可在開放加入時重新選組。' })) return;
+            if (!await confirmDialog({ title: `移出 ${seatText(p)}？`, body: '該裝置的資料會保留；學生可在開放加入時重新選組。' })) return;
             try { await rpc(client, 'teacher_remove_participant', { p_participant: p.id }); S.sync.refresh(); } catch (er) { toast(errorText(er), 'error'); }
           } }, '移出')))));
     })));
