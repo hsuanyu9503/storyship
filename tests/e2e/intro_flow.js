@@ -10,6 +10,7 @@
 //     6. 觸控連點只前進一步；鍵盤（→／PageDown、←／PageUp）
 //     7. 16:9（1920×1080、1366×768、1280×720）、4:3（1024×768）與窄螢幕（768×1024、390×844）：線索、圖片、文字都完整可讀；教師按鈕可操作
 //     8. 比較 → 命名 → 轉場 → 進入 02 → 03 故事卡分類仍可使用（八張卡、移動、閱讀卡）
+const { assumeFullscreen, joinGroup } = require('./student_join');
 const { chromium, devices } = require('playwright');
 const { Pool } = require('pg');
 const fs = require('fs');
@@ -54,9 +55,10 @@ const LEAK2 = ['神隱少女', '神隱', '千尋', '荻野', '小千', 'chihiro'
     await P.goto(projHref.startsWith('http') ? projHref : new URL(projHref, BASE + '/teacher.html').href);
     await P.waitForFunction(() => document.body.innerText.includes('各組加入狀態'));
     const sc = await browser.newContext({ ...devices['iPad Mini'] });
+    await sc.addInitScript(assumeFullscreen);
     const S = await sc.newPage(); S.on('pageerror', (e) => errors.push('student: ' + e.message));
     await S.goto(`${BASE}/join.html?code=${code}`);
-    await S.waitForSelector('.s-group'); await S.locator('.s-group:has(.n:text-is("1"))').tap(); await S.locator('dialog button:has-text("確認加入")').tap();
+    await joinGroup(S, 1, { tap: true });
     await S.waitForFunction(() => document.body.innerText.includes('已加入第 1 組'));
 
     // 畫面狀態

@@ -484,5 +484,50 @@ select t.ok((public.teacher_purge_expired()->>'deleted')::int = 1, '過保留期
 reset role;
 select t.ok((select count(*) from public.participants) = 0 and (select count(*) from public.group_snapshots) = 0, '清除時一併刪除學生與成果');
 
+-- ======================================================================
+-- 座號（2026-11-26）：學生加入時輸入；範圍檢查、恢復、舊資料補座號、換組／移出後重新加入、權限
+-- ======================================================================
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select (r->>'session_id') as ssid, (r->>'join_code') as scode from (select public.teacher_create_session('座號', 3) r) x \gset
+reset role;
+select md5('S1') || md5('S1x') as "tokS1", md5('S2') || md5('S2x') as "tokS2", md5('S3') || md5('S3x') as "tokS3", md5('S4') || md5('S4x') as "tokS4" \gset
+set role anon;
+select t.raises(format($$select public.student_join(%L, %L, 1, 0)$$, :'scode', :'tokS1'), 'INVALID_SEAT', '座號 0 被拒絕');
+select t.raises(format($$select public.student_join(%L, %L, 1, 1000)$$, :'scode', :'tokS1'), 'INVALID_SEAT', '座號 1000 被拒絕');
+select t.raises(format($$select public.student_join(%L, %L, 1, -5)$$, :'scode', :'tokS1'), 'INVALID_SEAT', '座號 -5 被拒絕');
+reset role;
+select t.ok((select count(*) from public.participants where session_id = :'ssid') = 0, '座號錯誤時沒有建立學生紀錄');
+set role anon;
+select t.ok((public.student_join(:'scode', :'tokS1', 1, 12)->>'seat_no')::int = 12, '帶座號加入：回傳座號 12');
+select t.ok((public.student_state(:'ssid', :'tokS1')->'me'->>'seat_no')::int = 12, '學生狀態含座號 12（重新整理後仍取得同一個座號）');
+select t.ok((public.student_join(:'scode', :'tokS1', 2, 30)->>'seat_no')::int = 12, '已加入的裝置再次加入（不同座號）：保留原座號 12');
+select t.ok((public.student_state(:'ssid', :'tokS1')->'me'->>'group_number')::int = 1, '再次加入不會換組');
+select t.ok((public.student_join(:'scode', :'tokS2', 1, 12)->>'resumed')::boolean = false, '同場次重複座號：目前允許加入（教師端各自顯示）');
+select t.ok(public.student_join(:'scode', :'tokS3', 2) ->> 'seat_no' is null, '舊版前端（三個參數）仍可加入，座號為 null');
+select t.ok((public.student_state(:'ssid', :'tokS3')->'me' ? 'seat_no') and (public.student_state(:'ssid', :'tokS3')->'me'->>'seat_no') is null, '沒有座號的學生：狀態中 seat_no 為 null（前端顯示「未填座號」）');
+select t.ok((public.student_join(:'scode', :'tokS3', 2, 8)->>'seat_no')::int = 8, '沒有座號的已加入裝置：重新加入時補上座號 8');
+select t.raises(format($$update public.participants set seat_no = 1 where session_id = %L$$, :'ssid'), 'DENIED', '學生不能直接修改座號');
+select t.raises(format($$select seat_no from public.participants where session_id = %L$$, :'ssid'), 'DENIED', '學生不能直接讀取名單與座號');
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select t.ok((select string_agg(seat_no::text, ',' order by seat_no) from public.participants where session_id = :'ssid') = '8,12,12', '教師可讀取座號（8、12、12）');
+select t.raises(format($$update public.participants set seat_no = 1 where session_id = %L$$, :'ssid'), 'DENIED', '教師也不能直接改寫座號');
+select id as "pS1" from public.participants where session_id = :'ssid' and seat_no = 12 order by joined_at limit 1 \gset
+select public.teacher_move_participant(:'pS1', 3) is null as x \gset
+select t.ok((select seat_no from public.participants where id = :'pS1') = 12, '教師換組後座號不變');
+select public.teacher_remove_participant(:'pS1') is null as x \gset
+reset role;
+set role anon;
+select t.ok((public.student_join(:'scode', :'tokS1', 2, 21)->>'seat_no')::int = 21, '被移出後重新加入：使用這次輸入的座號 21');
+select t.ok((public.student_join(:'scode', :'tokS4', 3)->>'seat_no') is null, '另一位沒有座號的學生');
+reset role;
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T3', false) as _ \gset
+select t.ok((select count(*) from public.participants where session_id = :'ssid') = 0, '其他教師讀不到這個場次的座號');
+reset role;
+delete from public.sessions where id = :'ssid';
+
 \pset tuples_only off
 select count(*) as "全部通過的檢查數" from t.passes;

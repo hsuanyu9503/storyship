@@ -13,6 +13,7 @@
 //     7. 04 兩位組員：一人翻面不改變另一人畫面，也沒有任何分類寫入請求或版本變化
 //     8. 圖片：WebP；看板只下載 600w 縮圖、閱讀卡依寬度與像素比選擇；大圖失敗時保留名稱與描述並可重試；移除後不殘留
 //     9. 07 投影的故事小卡用 600w 縮圖、完整呈現（contain）
+const { assumeFullscreen, joinGroup } = require('./student_join');
 const { chromium } = require('playwright');
 const { Pool } = require('pg');
 const fs = require('fs');
@@ -91,14 +92,16 @@ async function closeReader(p) { await p.locator('dialog.reader[open] .sr-close')
     const join = async (ctx) => {
       const p = await ctx.newPage(); p.on('pageerror', (e) => errors.push(e.message));
       await p.goto(`${BASE}/join.html?code=${cr.join_code}`);
-      await p.waitForSelector('.s-group'); await p.locator('.s-group:has(.n:text-is("1"))').tap(); await p.locator('dialog button:has-text("確認加入")').tap();
+      await joinGroup(p, 1, { tap: true });
       await p.waitForFunction(() => document.body.innerText.includes('已加入第 1 組'), null, { timeout: 12000 });
       return p;
     };
     const ctxA = await browser.newContext({ viewport: { width: 1366, height: 1024 }, hasTouch: true });
+    await ctxA.addInitScript(assumeFullscreen);
     const tA = track(ctxA);
     const A = await join(ctxA);
     const ctxB = await browser.newContext({ viewport: { width: 768, height: 1024 }, hasTouch: true, deviceScaleFactor: 2 });
+    await ctxB.addInitScript(assumeFullscreen);
     const tB = track(ctxB);
     const B = await join(ctxB);
     await stage('03', { screen: 'instruction' });
@@ -312,6 +315,7 @@ async function closeReader(p) { await p.locator('dialog.reader[open] .sr-close')
 
     // ---------- 8. 圖片失敗與恢復、移除後不殘留 ----------
     const ctxF = await browser.newContext({ viewport: { width: 1024, height: 768 }, hasTouch: true, storageState: await ctxA.storageState() });   // 同一位學生的另一個分頁
+    await ctxF.addInitScript(assumeFullscreen);
     let fail04 = true; const reqF = [];
     await ctxF.route('**/assets/stories/*.webp', (route) => {
       const f = route.request().url().replace(/^.*\/assets\/stories\//, ''); reqF.push(f);

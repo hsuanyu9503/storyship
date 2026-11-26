@@ -284,25 +284,42 @@ img.media { object-fit: cover; border-radius: 10px; display: block; }
 @media (orientation: portrait) { .s-groups { grid-template-columns: repeat(2, minmax(130px, 220px)); } }
 .s-group { min-height: 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .3rem; border-radius: 16px; border-width: 2px; }
 .s-group .n { font-size: 2.6rem; font-weight: 800; color: var(--accent); } .s-group .l { font-size: 1.1rem; }
+/* 選組畫面：座號＋組別（選取中的組別以底色標示）＋加入 */
+.s-join { gap: .9rem; padding: 1.2rem 1rem; }
+.s-field { display: flex; flex-direction: column; align-items: center; gap: .45rem; }
+.s-label { font-size: 1.15rem; font-weight: 700; }
+.s-input.s-seat { width: 7.5em; font-size: 1.8rem; letter-spacing: .08em; padding: .35em .5em; }
+.s-input[aria-invalid="true"] { border-color: var(--bad); outline: 2px solid var(--bad-soft); }
+.s-field-error { margin: 0; font-size: 1.05rem; font-weight: 700; }
+.s-join .s-group { min-height: 92px; }
+.s-group[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent-soft); }
+.s-group[aria-pressed="true"] .n { color: var(--accent-ink); }
+.s-join-go { min-width: min(320px, 86vw); }
 .s-phase2-note { background: var(--warn-soft); color: var(--warn); padding: .6rem 1rem; text-align: center; }
 .s-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; padding: 1rem; }
 .s-card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: .8rem; display: flex; flex-direction: column; gap: .4rem; }
 .s-card-img { height: 110px; width: 100%; }
 .s-card-title { font-weight: 700; font-size: 1.15rem; } .s-card-sum { color: var(--muted); font-size: .95rem; }
 body.focus-mode { overscroll-behavior: none; }
-/* 學生退出全螢幕時的提示（js/student/fullscreen.js）：浮在目前活動畫面上，不重畫、不搶焦點 */
-.fsr-box { position: fixed; z-index: 1000; inset: auto 0 auto 0; top: 12px; margin: 0 auto; width: min(560px, calc(100vw - 24px));
-  padding: 0; border: 3px solid #b0702a; border-radius: 16px; background: #fff8ec; color: #3b2a12; box-shadow: 0 10px 32px rgba(0,0,0,.28); overflow: visible; }
-.fsr-box[hidden] { display: none; }
-.fsr-box:popover-open { display: block; }
-.fsr-inner { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px 18px; text-align: center; }
-.fsr-msg { margin: 0; font-size: 1.3rem; font-weight: 800; line-height: 1.45; text-wrap: balance; }
-.fsr-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
-/* 選擇器加上 .fsr-box：提示放進閱讀卡（.sr）時，不被閱讀卡的按鈕樣式覆蓋 */
-.fsr-box .fsr-msg { font-family: inherit; }
-.fsr-box button.fsr-btn { font-size: 1.35rem; min-height: 56px; min-width: 220px; padding: .5em 1.4em; border-radius: 12px; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); font-weight: 700; }
-.fsr-box button.fsr-continue { font-size: 1.1rem; min-height: 56px; min-width: 140px; padding: .5em 1.2em; border-radius: 12px; background: #fff; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
-.fsr-btn:focus-visible, .fsr-continue:focus-visible { outline: 3px solid #b0702a; outline-offset: 3px; }
+/* 學生退出全螢幕時的全黑遮罩（js/student/fullscreen.js）：showModal 的對話框，蓋住整個可視區域，背景不能操作 */
+dialog.fsx { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; max-width: none; max-height: none; margin: 0;
+  padding: 24px; border: 0; border-radius: 0; background: #000; color: #fff; box-shadow: none; overflow: auto; }
+dialog.fsx[open] { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; text-align: center; }
+dialog.fsx::backdrop { background: #000; }
+.fsx-msg { margin: 0; font-size: clamp(1.5rem, 4.2vw, 2.6rem); font-weight: 800; line-height: 1.4; color: #fff; text-wrap: balance; }
+dialog.fsx button.fsx-btn { font: inherit; font-size: clamp(1.35rem, 3.2vw, 1.9rem); font-weight: 800; min-height: 76px; min-width: min(300px, 80vw);
+  padding: .55em 1.6em; border-radius: 18px; background: #fff; color: #000; border: 3px solid #fff; cursor: pointer; touch-action: manipulation; }
+dialog.fsx button.fsx-btn:disabled { opacity: .6; }
+dialog.fsx button:focus-visible { outline: 4px solid #ffd54a; outline-offset: 4px; }
+.fsx-err { margin: 0; max-width: 32em; font-size: 1.15rem; line-height: 1.6; color: #ffdcae; }
+dialog.fsx button.fsx-alt { font: inherit; font-size: 1.05rem; min-height: 52px; padding: .4em 1.2em; border-radius: 12px; background: transparent; color: #fff; border: 1px solid #9a9a9a; }
+/* 打字中退出全螢幕：不擋操作的小提示（離開文字欄位後才出現黑色遮罩） */
+.fsx-note, .fsx-info { position: fixed; z-index: 1000; top: 8px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 24px);
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 999px; background: #111; color: #fff; font-size: 1rem;
+  box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+.fsx-note[hidden], .fsx-info[hidden] { display: none; }
+.fsx-note button, .fsx-info button { font: inherit; font-size: .95rem; min-height: 40px; padding: .2em .9em; border-radius: 999px; background: #fff; color: #000; border: 0; font-weight: 700; }
+.fsx-info { border-radius: 14px; }
 body.focus-mode .s-header { padding: .5rem 1rem; font-size: 1rem; }
 
 /* ---------- Phase 2：分類工作區（個人分類；Phase 3 小組共作共用） ---------- */
@@ -536,6 +553,8 @@ img.st-match-img { object-fit: contain; background: #e9e5d8; }
 .gp-table td, .gp-table th { vertical-align: middle; }
 .gp-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
 .gp-members { font-size: .85em; color: var(--muted); }
+.seats { display: block; font-size: .9em; color: var(--ink); line-height: 1.5; }
+.ready-cell .seats { color: var(--muted); }
 .bd-panel .bd-col-head { display: none; }
 
 /* ---------- Phase 4：05 成果比較、07 對照（16:9 投影，以容器寬度縮放） ---------- */
@@ -626,12 +645,12 @@ html.font-old .reader.sr, html.font-old textarea { font-family: "Microsoft Jheng
    段落：text-wrap: pretty（避免末行只剩一個字）；短標題、按鈕、提示句：balance（兩行時平均分配，不留一個字在下一行）。
    瀏覽器不支援時照原本方式換行，不影響內容。 */
 p, li, .st-clue2-body, .st-clue-recap span, .st-reveal2-desc, .st-ic-prompt, .st-intro-opening, .st-lead, .s-lead, .sr-reading p, .intro-now { text-wrap: pretty; }
-h1, h2, h3, button, .btn, .st-title, .st-sub, .st-prompt, .sr-title, .sc-title, .st-clue2-label, .st-ic-title, .st-reveal2-title, .st-chip, .fsr-msg, .sr-foot > span, .bd-hint { text-wrap: balance; }
+h1, h2, h3, button, .btn, .st-title, .st-sub, .st-prompt, .sr-title, .sc-title, .st-clue2-label, .st-ic-title, .st-reveal2-title, .st-chip, .fsx-msg, .sr-foot > span, .bd-hint { text-wrap: balance; }
 /* 名字變化：姓名不拆開；箭頭跟著新名字（「舊名」／「→ 新名」），不單獨一行 */
 .st-names .st-nm { white-space: nowrap; }
 /* 短的介面文字（按鈕、標題、狀態列、提示）：只在標點與空白處換行（例如「略過，／直接進入下一環節：／分類任務啟動 →」），
    不在詞中間斷開；真的放不下時才任意斷行（overflow-wrap: anywhere），不會溢出。段落仍逐字換行。 */
-button, .btn, h1, h2, h3, .st-title, .st-chip, .st-clue2-label, .st-reveal2-title, .st-ic-title, .sr-title, .sc-title, .intro-now, .fsr-msg, .bd-hint { word-break: keep-all; overflow-wrap: anywhere; }
+button, .btn, h1, h2, h3, .st-title, .st-chip, .st-clue2-label, .st-reveal2-title, .st-ic-title, .sr-title, .sc-title, .intro-now, .fsx-msg, .bd-hint { word-break: keep-all; overflow-wrap: anywhere; }
 /* 環節名稱（沒有標點）維持逐字換行＋balance，避免在最後留下單獨一個字 */
 /* 窄的環節列表（1180px 以下）：不顯示建議分鐘數，讓環節名稱有足夠寬度 */
 @media (min-width: 761px) and (max-width: 1180px) { .console-grid { grid-template-columns: 200px minmax(0, 1fr); } }

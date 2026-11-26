@@ -2,6 +2,7 @@
 //   輸出到 tests/e2e/.cache/story-shots/：看板與閱讀卡正反面（1366×1024、1024×768、768×1024，像素比 2）、04 小組看板、
 //   翻面錄影（1024×768，WebM）。docs/screenshots/stories/ 由這些輸出轉成 WebP。
 //   需要 sf_story 與對應的 shim（見 story_reader.js 的說明）。
+const { assumeFullscreen, joinGroup } = require('./student_join');
 const { chromium } = require('playwright');
 const { Pool } = require('pg');
 const fs = require('fs');
@@ -29,9 +30,10 @@ async function api(fn, args, token) {
     const rev = async () => Number((await pg.query('select rev from public.session_state where session_id = $1', [SID])).rows[0].rev);
     const stage = async (phase, lock) => { const r = await api('teacher_set_stage', { p_session: SID, p_phase: phase, p_sub: phase, p_projection: { screen: 'instruction' }, p_expected_rev: await rev(), p_lock_unsubmitted: lock }, TT); if (!r.ok) throw new Error(JSON.stringify(r)); };
     const ctx = await browser.newContext({ viewport: { width: 1366, height: 1024 }, hasTouch: true, deviceScaleFactor: 2 });
+    await ctx.addInitScript(assumeFullscreen);
     const p = await ctx.newPage();
     await p.goto(`${BASE}/join.html?code=${cr.join_code}`);
-    await p.waitForSelector('.s-group'); await p.locator('.s-group:has(.n:text-is("1"))').tap(); await p.locator('dialog button:has-text("確認加入")').tap();
+    await joinGroup(p, 1, { tap: true });
     await p.waitForFunction(() => document.body.innerText.includes('已加入第 1 組'), null, { timeout: 12000 });
     await stage('03', false);
     await p.waitForSelector('.sc-grip', { timeout: 15000 });
@@ -70,9 +72,10 @@ async function api(fn, args, token) {
     const vctx = await browser.newContext({ viewport: { width: 1024, height: 768 }, hasTouch: true, storageState: undefined,
       recordVideo: { dir: OUT, size: { width: 1024, height: 768 } } });
     await vctx.addCookies([]);
+    await vctx.addInitScript(assumeFullscreen);
     const v = await vctx.newPage();
     await v.goto(`${BASE}/join.html?code=${cr.join_code}`);
-    await v.waitForSelector('.s-group'); await v.locator('.s-group:has(.n:text-is("2"))').tap(); await v.locator('dialog button:has-text("確認加入")').tap();
+    await joinGroup(v, 2, { tap: true });
     await v.waitForSelector('.gw-main .sc-read', { timeout: 15000 }); await sleep(1500);
     await v.locator('.gw-main .sc:has(.sc-title:text-is("北海小英雄")) .sc-read').tap();
     await v.waitForSelector('dialog.reader[open]'); await sleep(1400);

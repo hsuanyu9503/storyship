@@ -6,6 +6,7 @@
 //   16:9 投影：以真實流程建立合法上限內容（分類名稱 30 字、理由 300 字、8 張故事、6 個分類），
 //     量測投影是否裁切；教師端預覽的「放不下」提醒與實際投影一致；改用放大此側＋每頁 1 類後完整可見。
 // 需要 shim.js（或 tests/supabase 的真實堆疊：設定 BASE、E2E_EMAIL、E2E_PASSWORD、DATABASE_URL）。
+const { assumeFullscreen, joinGroup } = require('./student_join');
 const { chromium, devices } = require('playwright');
 const { Pool } = require('pg');
 const path = require('path');
@@ -75,12 +76,11 @@ const noHScroll = (p) => p.evaluate(() => document.documentElement.scrollWidth <
     const S = [];
     for (const [dev, g] of studentDevs) {
       const c = await browser.newContext({ ...devices[dev] });
+      await c.addInitScript(assumeFullscreen);
       const p = await c.newPage();
       p.on('pageerror', (e) => errors.push(dev + ': ' + e.message));
       await p.goto(`${BASE}/join.html?code=${CODE}`);
-      await p.waitForSelector('.s-group');
-      await p.locator(`.s-group:has(.n:text-is("${g}"))`).tap();
-      await p.locator('dialog button:has-text("確認加入")').tap();
+      await joinGroup(p, g, { tap: true });
       await p.waitForFunction((n) => document.body.innerText.includes('已加入第 ' + n + ' 組'), g, { timeout: 12000 });
       const token = await p.evaluate(() => Object.entries(localStorage).find(([k]) => k.startsWith('sf.token.'))?.[1]?.replace(/"/g, ''));
       S.push({ dev, g, c, p, token });

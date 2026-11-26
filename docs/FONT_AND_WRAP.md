@@ -5,6 +5,8 @@
 
 ## 1. 學生退出全螢幕時的「回到全螢幕」
 
+> 2026-11-26 已改版：改為確認加入時進入全螢幕、退出時顯示全黑遮罩，見 [`SEAT_FULLSCREEN.md`](SEAT_FULLSCREEN.md)。以下為舊版紀錄（`tests/e2e/fullscreen.js` 已由 `seat_fullscreen.js` 取代）。
+
 * 檔案：`js/student/fullscreen.js`（新增）、`js/student/main.js`（「進入探索模式」改呼叫 `enterFullscreen`）、`css/app.css`（`.fsr-*`）。
 * 依瀏覽器實際狀態（`document.fullscreenElement`／`webkitFullscreenElement`、`fullscreenchange`）判斷。學生按過「進入探索模式」後，
   只要不在全螢幕，就在目前畫面上方顯示「請回到全螢幕，繼續活動」與大按鈕「回到全螢幕」（220×56px）；回到全螢幕後消失，再次退出再出現。
