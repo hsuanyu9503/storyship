@@ -381,7 +381,7 @@ const covered = (p) => p.evaluate(() => {
     // 11. 教師端各成員清單：02 加入狀態、03 個人分類、04 小組進度
     // ======================================================================
     await stage('02', { screen: 'task' });
-    ok(await until(() => T.evaluate(() => [...document.querySelectorAll('.ready-cell')].some((c) => c.textContent.includes('5 號、12 號')))), '教師端 02：各組加入狀態顯示座號（第 2 組「5 號、12 號」）');
+    ok(await until(() => T.evaluate(() => [...document.querySelectorAll('.ready-cell')].some((c) => [...c.querySelectorAll('.seat-n')].map((x) => x.textContent).join('、') === '5 號、12 號'))), '教師端 02：各組加入狀態顯示座號（第 2 組「5 號、12 號」）');
     await T.screenshot({ path: path.join(SHOTS, 'teacher-02-1366x1024.png') });
     await stage('03', { screen: 'instruction' });
     await until(() => T.evaluate(() => Boolean(document.querySelector('.pp-row'))));
@@ -389,7 +389,7 @@ const covered = (p) => p.evaluate(() => {
     ok(await until(() => T.evaluate(() => [...document.querySelectorAll('.pp-people tbody tr td:first-child')].map((x) => x.textContent).join() === '5 號,12 號')), '教師端 03 個人分類：第 2 組成員為「5 號」「12 號」');
     await T.screenshot({ path: path.join(SHOTS, 'teacher-03-1366x1024.png') });
     await stage('04', { screen: 'instruction' });
-    ok(await until(() => T.evaluate(() => [...document.querySelectorAll('.gp-members')].some((c) => c.textContent.includes('5 號、12 號')))), '教師端 04 小組進度：第 2 組「5 號、12 號」');
+    ok(await until(() => T.evaluate(() => [...document.querySelectorAll('.gp-members')].some((c) => [...c.querySelectorAll('.seat-n')].map((x) => x.textContent).join('、') === '5 號、12 號'))), '教師端 04 小組進度：第 2 組「5 號、12 號」');
     await T.screenshot({ path: path.join(SHOTS, 'teacher-04-1366x1024.png') });
 
     // ======================================================================

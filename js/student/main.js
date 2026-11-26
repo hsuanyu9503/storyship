@@ -4,7 +4,8 @@ import { createSync } from '../lib/sync.js';
 import { h, mount, confirmDialog, toast } from '../lib/dom.js';
 import { STUDENT_VIEW, STUDENT_TEXT, TEXT } from '../lib/phases.js';
 import { createPersonal } from './personal.js';
-import { beginFullscreen, setRequired, fsSupported } from './fullscreen.js';
+import { beginFullscreen, setRequired, fsSupported, fsReportState, onFsChange } from './fullscreen.js';
+import { createFsReporter } from './fs-report.js';
 import { parseSeat, seatText } from '../lib/seat.js';
 import { createGroup } from './group.js';
 
@@ -17,6 +18,7 @@ let lastKey = '';
 let personal = null;   // 03 個人分類工作區（保持同一個實體，避免同步時打斷操作）
 let group = null;      // 04 小組共作工作區（同上；換組或換場次時才重建）
 let explore = false;   // 學生已加入（探索模式：網站專注模式＋全螢幕）
+let fsReporter = null;  // 全螢幕狀態回報（教師端小組成員清單）
 let joinForm = { seat: '', group: null };   // 選組畫面的輸入（加入失敗或格式錯誤時保留）
 
 // ---------- 匿名、可恢復的裝置識別 ----------
@@ -151,27 +153,46 @@ async function start() {
 // ---------- 上課中：依教師控制的環節顯示畫面 ----------
 function runSession(sessionId) {
   sync?.stop();
+  fsReporter?.stop();
   explore = true;
   setRequired(true);   // 已加入（含重新整理、斷線重連後恢復）：退出全螢幕時顯示黑色遮罩
   const token = tokenFor(code);
+  const seqKey = 'sf.fsseq.' + code;
+  fsReporter = createFsReporter({
+    getState: fsReportState,
+    send: (state, seq) => rpc(client, 'student_report_fullscreen', { p_session: sessionId, p_token: token, p_state: state, p_seq: seq }),
+    loadSeq: () => storeGet(seqKey), saveSeq: (v) => storeSet(seqKey, v),
+    onAccepted: () => sync?.ping('fullscreen'),   // 通知教師端立即重新讀取
+  });
+  let wasOnline = true;
   sync = createSync({
     client,
     topic: 'lesson:' + sessionId,
     load: () => rpc(client, 'student_state', { p_session: sessionId, p_token: token }),
-    onStatus: ({ online }) => { netBar.hidden = online; },
+    onStatus: ({ online }) => {
+      netBar.hidden = online;
+      if (online && !wasOnline) fsReporter?.resync();   // 重新連線：先回報當下的全螢幕狀態
+      wasOnline = online;
+    },
     onData: (st, err) => {
       if (err) {
-        if (err.code === 'NOT_JOINED') { try { localStorage.removeItem(sessionKey(code)); } catch { /* 隱私模式 */ } sync.stop(); explore = false; return chooseGroup(); }
+        if (err.code === 'NOT_JOINED') { try { localStorage.removeItem(sessionKey(code)); } catch { /* 隱私模式 */ } sync.stop(); fsReporter?.stop(); explore = false; return chooseGroup(); }
         return;
       }
       renderState(sessionId, token, st);
     },
   });
+  fsReporter.report();   // 加入、重新整理後：回報當下狀態
 }
+// 全螢幕狀態改變（進入、退出、請求未被允許）：回報
+onFsChange((state) => fsReporter?.report(state));
+addEventListener('online', () => fsReporter?.resync());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') fsReporter?.resync(); });   // 回到前景：背景期間的回報可能遺失
 
 function renderState(sessionId, token, st) {
   if (st.removed) {
     setRequired(false);   // 已被移出：不再要求全螢幕
+    fsReporter?.stop(); fsReporter = null;
     if (personal) { personal.destroy(); personal = null; }
     if (group) { group.destroy(); group = null; }
     const k = 'removed';

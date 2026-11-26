@@ -529,5 +529,59 @@ select t.ok((select count(*) from public.participants where session_id = :'ssid'
 reset role;
 delete from public.sessions where id = :'ssid';
 
+-- ======================================================================
+-- 學生全螢幕狀態（2026-11-26）：回報、順序、退出次數、權限、不推進課程版本
+-- ======================================================================
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select (r->>'session_id') as fsid, (r->>'join_code') as fcode from (select public.teacher_create_session('全螢幕', 2) r) x \gset
+select (r->>'session_id') as fsid2, (r->>'join_code') as fcode2 from (select public.teacher_create_session('另一場', 2) r) x \gset
+reset role;
+select md5('F1') || md5('F1x') as "tokF1", md5('F2') || md5('F2x') as "tokF2" \gset
+set role anon;
+select public.student_join(:'fcode', :'tokF1', 1, 3) is not null as _ \gset
+select public.student_join(:'fcode', :'tokF2', 2, 9) is not null as _ \gset
+reset role;
+select rev as frev0 from public.session_state where session_id = :'fsid' \gset
+set role anon;
+select t.raises(format($$select public.student_report_fullscreen(%L, %L, 'weird', 1)$$, :'fsid', :'tokF1'), 'BAD_DATA', '不合法的狀態值被拒絕');
+select t.raises(format($$select public.student_report_fullscreen(%L, %L, 'on', null)$$, :'fsid', :'tokF1'), 'BAD_DATA', '沒有序號被拒絕');
+select t.raises(format($$select public.student_report_fullscreen(%L, %L, 'on', 1)$$, :'fsid2', :'tokF1'), 'NOT_JOINED', '不能回報沒有加入的場次');
+select t.raises(format($$select public.student_report_fullscreen(%L, %L, 'on', 1)$$, :'fsid', md5('nobody') || md5('nobody')), 'NOT_JOINED', '未加入的裝置不能回報');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 100)->>'state') = 'none', '尚未進入過全螢幕時回報 off：尚未進入（none）');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'denied', 110)->>'state') = 'denied', '尚未進入過全螢幕、請求未被允許：denied');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 120)->>'state') = 'active', '進入全螢幕：active');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 130)->>'state') = 'exited', '曾進入後退出：exited');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 130)->>'reason') = 'STALE', '重送同一個序號：忽略');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 140)->>'state') = 'exited', '再次回報已退出（不同序號）：仍是 exited');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 160)->>'state') = 'active', '返回全螢幕：active');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 150)->>'reason') = 'STALE', '延遲送達的舊「已退出」（序號較小）：忽略');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'denied', 170)->>'state') = 'exited', '曾進入全螢幕後請求被拒絕：仍是 exited');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF2', 'unsupported', 5)->>'state') = 'unsupported', '裝置不支援：unsupported');
+select t.raises(format($$update public.participants set fs_state = 'active' where session_id = %L$$, :'fsid'), 'DENIED', '學生不能直接改寫全螢幕狀態');
+select t.raises(format($$select fs_state from public.participants where session_id = %L$$, :'fsid'), 'DENIED', '學生不能直接讀取全螢幕狀態');
+reset role;
+select t.ok((select fs_exits from public.participants where session_id = :'fsid' and seat_no = 3) = 2, '退出次數只計「全螢幕中 → 已退出」：2 次（重送、重複回報、延遲訊息、被拒絕都不計）');
+select t.ok((select fs_seq from public.participants where session_id = :'fsid' and seat_no = 3) = 170, '已接受的最大序號 170');
+select t.ok((select rev from public.session_state where session_id = :'fsid') = :frev0, '全螢幕回報不推進課程操作版本');
+select t.ok((select rev from public.personal_boards b join public.participants p on p.id = b.participant_id where p.session_id = :'fsid' and p.seat_no = 3) = 0, '全螢幕回報不影響個人分類版本');
+set role authenticated;
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select t.ok((select string_agg(seat_no || ':' || fs_state || ':' || fs_exits, ',' order by seat_no) from public.participants where session_id = :'fsid') = '3:exited:2,9:unsupported:0', '教師可讀取自己場次的全螢幕狀態');
+select t.raises(format($$update public.participants set fs_state = 'active' where session_id = %L$$, :'fsid'), 'DENIED', '教師不能直接改寫全螢幕狀態');
+select set_config('request.jwt.claim.sub', :'T3', false) as _ \gset
+select t.ok((select count(*) from public.participants where session_id = :'fsid') = 0, '其他教師讀不到這個場次的全螢幕狀態');
+select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
+select id as "pF1" from public.participants where session_id = :'fsid' and seat_no = 3 \gset
+select public.teacher_remove_participant(:'pF1') is null as x \gset
+reset role;
+set role anon;
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 200)->>'reason') = 'INACTIVE', '被移出後的回報不更新');
+select t.ok((public.student_join(:'fcode', :'tokF1', 1, 3)->>'resumed')::boolean = false, '被移出後重新加入');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 210)->>'state') = 'none', '重新加入後重新開始：還沒進入過全螢幕時為 none');
+reset role;
+select t.ok((select fs_exits from public.participants where session_id = :'fsid' and seat_no = 3) = 2, '重新加入後退出次數保留（只增不減，教師端不會誤判）');
+delete from public.sessions where id in (:'fsid', :'fsid2');
+
 \pset tuples_only off
 select count(*) as "全部通過的檢查數" from t.passes;

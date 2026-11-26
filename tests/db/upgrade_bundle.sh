@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 單一檔案升級（supabase/upgrade/upgrade.sql）的測試：
 #   1. 與 002／003／verify.sql 同步（由 build.sh 產生，沒有手動改動）
-#   2. 從已部署的 Phase 3（main 2bb50e4，複檢前版本）＋上課中資料升級：資料不變、18 項檢查全過、修正生效
+#   2. 從已部署的 Phase 3（main 2bb50e4，複檢前版本）＋上課中資料升級：資料不變、19 項檢查全過、修正生效
 #   3. 從 Phase 2（577e76c）升級：檢查全過
 #   4. 原子性：在交易中段注入錯誤 → 資料庫完全維持升級前狀態（沒有半套）
 #   5. 可重複執行；以 Supabase 式的預設權限（新資料表自動授權 anon）執行
@@ -42,7 +42,7 @@ digest() { psql_ -d "$1" -c "select md5(string_agg(t, '|' order by t)) from (
   select 'gs' || id || group_id || kind || data::text || is_complete || board_rev || created_at from public.group_snapshots union all
   select 'st' || session_id || phase || rev || editing_paused from public.session_state) x"; }
 verify_ok() { local bad; bad=$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|f$' || true)
-  [ "$bad" = "0" ] && [ "$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|t$')" = "18" ]; }
+  [ "$bad" = "0" ] && [ "$(psql_ -d "$1" -f "$ROOT/supabase/checks/verify.sql" | grep -c '|t$')" = "19" ]; }
 
 # 2. 已部署的 Phase 3（複檢前）＋上課中資料
 DB=story_friends_bundle_p3
@@ -72,7 +72,7 @@ psql_ -d $DB -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "升級失敗"
 [ "$(digest $DB)" = "$BEFORE" ] || fail "升級後既有資料改變"
 verify_ok $DB || { psql_ -d $DB -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
 psql_ -d $DB -c "select prosrc from pg_proc where proname = 'own_session'" | grep -q "for no key update" || fail "修正沒有生效"
-echo "ok - 從已部署的 Phase 3（2bb50e4）＋上課中資料升級：資料不變、18 項檢查全過、修正生效"
+echo "ok - 從已部署的 Phase 3（2bb50e4）＋上課中資料升級：資料不變、19 項檢查全過、修正生效"
 OUT=$(psql_ -d $DB -c "set role anon" -c "select public.group_update_category('$SID', '$TA', 'eeeeeeee-0000-4000-8000-000000000001', 'reason', 'x', null)" 2>&1 || true)
 echo "$OUT" | grep -q BAD_DATA || fail "升級後 null 版本號仍被接受：$OUT"
 [ "$(psql_ -d $DB -c "set role anon" -c "select public.student_group_board('$SID', '$TA')->'categories'->0->>'reason'" | tail -1)" = "升級前的理由" ] || fail "上課中資料無法讀取"
@@ -86,7 +86,7 @@ DB2=story_friends_bundle_p2
 mkdb $DB2 577e76c
 psql_ -d $DB2 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 Phase 2 升級失敗"
 verify_ok $DB2 || fail "從 Phase 2 升級後檢查未通過"
-echo "ok - 從 Phase 2（577e76c）以單一檔案升級：18 項檢查全過"
+echo "ok - 從 Phase 2（577e76c）以單一檔案升級：19 項檢查全過"
 
 # 5. 從已部署的 Phase 3（main 89299af）＋上課中資料升級到 Phase 4
 DB3=story_friends_bundle_p4
@@ -108,7 +108,7 @@ psql_ -d $DB3 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 Phase 3 升級�
 [ "$(digest $DB3)" = "$BEFORE" ] || fail "升級到 Phase 4 後既有資料改變"
 [ "$(psql_ -d $DB3 -c "select md5(string_agg(id || data::text || created_at, '|' order by id)) from public.group_snapshots")" = "$SNAPS" ] || fail "升級後快照改變"
 verify_ok $DB3 || { psql_ -d $DB3 -f "$ROOT/supabase/checks/verify.sql"; fail "升級到 Phase 4 後檢查未全數通過"; }
-echo "ok - 從已部署的 Phase 3（89299af）＋上課中資料升級：資料與快照不變、18 項檢查全過"
+echo "ok - 從已部署的 Phase 3（89299af）＋上課中資料升級：資料與快照不變、19 項檢查全過"
 S1=$(psql_ -d $DB3 -c "select gs.id from public.group_snapshots gs join public.groups g on g.id = gs.group_id where g.session_id = '$SID' and g.number = 1")
 R=$(psql_ -d $DB3 -c "$TEACH" -c "select public.teacher_publish_compare('$SID', jsonb_build_object('left', '$S1', 'reasons', jsonb_build_object('left', jsonb_build_array('ffffffff-0000-4000-8000-000000000001'))), (select rev from public.session_state where session_id = '$SID'))->>'ok'" | tail -1)
 [ "$R" = "true" ] || fail "升級後無法公開升級前保存的快照：$R"
@@ -189,7 +189,7 @@ psql_ -d $DB6 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 6405692 升級�
 verify_ok $DB6 || { psql_ -d $DB6 -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
 [ "$(psql_ -d $DB6 -c "select md5(projection::text || disclosure::text || stage_ctl::text) from public.session_state where session_id = '$SID'")" = "$STATE6" ] || fail "升級改動了場次狀態"
 [ "$(psql_ -d $DB6 -c "select md5(string_agg(id || name || elements::text || coalesce(visual_url, ''), '|' order by slug)) from public.genres")" = "$GEN6" ] || fail "升級本身改動了教材（應由教材腳本另外執行）"
-echo "ok - 從已部署的 Phase 5（6405692）＋停在 07 的場次升級：新欄位與函式就緒、18 項全過；場次狀態與教材都不變"
+echo "ok - 從已部署的 Phase 5（6405692）＋停在 07 的場次升級：新欄位與函式就緒、19 項全過；場次狀態與教材都不變"
 cp "$ROOT/supabase/content/genre_materials_v1.sql" "$TMP/content.sql"; chmod 644 "$TMP/content.sql"
 psql_ -d $DB6 -c "update public.session_state set updated_at = now() - interval '3 hours'" >/dev/null
 psql_ -d $DB6 -f "$TMP/content.sql" >/dev/null 2>&1 || fail "升級後套用教材失敗"
@@ -226,7 +226,7 @@ psql_ -d $DB7 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 df6fcd8 升級�
 verify_ok $DB7 || { psql_ -d $DB7 -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
 [ "$(W7)" = "$WB7" ] && [ "$(C7)" = "$CB7" ] || fail "升級本身改動了分類、快照、場次或故事卡（應由教材腳本另外執行）"
 [ "$(psql_ -d $DB7 -c "set role anon" -c "select (public.student_cards('$SID', '$TA7') -> 0 ->> 'elements')" | tail -1)" = "[]" ] || fail "升級後舊故事卡的 elements 應為空陣列"
-echo "ok - 從已部署的 main（df6fcd8）＋停在 04 的場次升級：elements 欄位就緒（舊卡為空陣列）、18 項全過；分類、快照、場次與故事卡都不變"
+echo "ok - 從已部署的 main（df6fcd8）＋停在 04 的場次升級：elements 欄位就緒（舊卡為空陣列）、19 項全過；分類、快照、場次與故事卡都不變"
 cp "$ROOT/supabase/content/story_cards_v1.sql" "$TMP/cards.sql"; chmod 644 "$TMP/cards.sql"
 psql_ -d $DB7 -c "update public.session_state set updated_at = now() - interval '3 hours'" >/dev/null
 psql_ -d $DB7 -f "$TMP/cards.sql" >/dev/null 2>&1 || fail "升級後套用故事卡教材失敗"
@@ -248,7 +248,7 @@ SB8=$(S8); IB8=$(I8)
 psql_ -d $DB8 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 2d04917 升級失敗"
 verify_ok $DB8 || { psql_ -d $DB8 -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
 [ "$(S8)" = "$SB8" ] && [ "$(I8)" = "$IB8" ] || fail "升級本身改動了場次或探索故事"
-echo "ok - 從已部署的 main（2d04917）＋停在 01 的場次升級：第一環節新欄位就緒、18 項全過；場次與探索故事不變"
+echo "ok - 從已部署的 main（2d04917）＋停在 01 的場次升級：第一環節新欄位就緒、19 項全過；場次與探索故事不變"
 cp "$ROOT/supabase/content/intro_materials_v1.sql" "$TMP/intro.sql"; chmod 644 "$TMP/intro.sql"
 psql_ -d $DB8 -c "update public.session_state set updated_at = now() - interval '3 hours'" >/dev/null
 psql_ -d $DB8 -f "$TMP/intro.sql" >/dev/null 2>&1 || fail "升級後套用 01 教材失敗"
@@ -279,4 +279,28 @@ verify_ok $DB9 || { psql_ -d $DB9 -f "$ROOT/supabase/checks/verify.sql"; fail "�
 [ "$(psql_ -d $DB9 -c "$TEACH" -c "select string_agg(coalesce(seat_no::text, '-'), ',' order by joined_at) from public.participants where session_id = '$SID'" | tail -1)" = "3,-,15" ] || fail "教師讀取座號"
 psql_ -d $DB9 -f "$TMP/bundle.sql" >/dev/null 2>&1 && verify_ok $DB9 || fail "座號升級後重複執行 upgrade.sql"
 [ "$(psql_ -d $DB9 -c "select coalesce(seat_no::text, '-') from public.participants where session_id = '$SID' order by joined_at" | tr '\n' ',')" = "3,-,15," ] || fail "重複執行改動了座號"
-echo "ok - 從已部署的 main（7c22cba）＋03 進行中的場次升級：資料不變、18 項全過；既有學生座號為 null 且可繼續；新學生帶座號加入；重複執行不改座號"
+echo "ok - 從已部署的 main（7c22cba）＋03 進行中的場次升級：資料不變、19 項全過；既有學生座號為 null 且可繼續；新學生帶座號加入；重複執行不改座號"
+
+# 12. 學生全螢幕狀態：已部署的 main（d01b7b3，含座號）＋停在 04、學生已加入的場次 → 新 upgrade.sql
+DB10=story_friends_bundle_fs
+mkdb $DB10 d01b7b3
+psql_ -d $DB10 -c "insert into auth.users (id, email) values ('$T1', 't1@example.com'); insert into public.teachers values ('$T1', 't1@example.com');" >/dev/null
+SID=$(psql_ -d $DB10 -c "$TEACH" -c "select public.teacher_create_session('fs', 2)->>'session_id'" | tail -1)
+CODE10=$(psql_ -d $DB10 -c "select join_code from public.sessions where id = '$SID'")
+TA10=$(printf '7%.0s' {1..40}); TB10=$(printf '8%.0s' {1..40})
+psql_ -d $DB10 -c "set role anon" -c "select public.student_join('$CODE10', '$TA10', 1, 4), public.student_join('$CODE10', '$TB10', 2, 11)" >/dev/null
+for ph in 03 04; do psql_ -d $DB10 -c "$TEACH" -c "select public.teacher_set_stage('$SID', '$ph', '$ph', '{\"screen\":\"instruction\"}', (select rev from public.session_state where session_id = '$SID'), false)" >/dev/null; done
+GC10=$(psql_ -d $DB10 -c "set role anon" -c "select public.group_add_category('$SID', '$TA10', gen_random_uuid())->>'category_id'" | tail -1)
+DG10=$(digest $DB10); RV10=$(psql_ -d $DB10 -c "select rev from public.session_state where session_id = '$SID'")
+psql_ -d $DB10 -f "$TMP/bundle.sql" >/dev/null 2>&1 || fail "從 d01b7b3 升級失敗"
+verify_ok $DB10 || { psql_ -d $DB10 -f "$ROOT/supabase/checks/verify.sql"; fail "升級後檢查未全數通過"; }
+[ "$(digest $DB10)" = "$DG10" ] || fail "升級改動了場次、學生、分類或課堂狀態"
+[ "$(psql_ -d $DB10 -c "select count(*) from public.participants where fs_state is null and fs_exits = 0 and not fs_ever")" = "2" ] || fail "既有學生的全螢幕狀態應為尚未回報"
+[ "$(psql_ -d $DB10 -c "set role anon" -c "select public.student_report_fullscreen('$SID', '$TA10', 'on', 1)->>'state'" | tail -1)" = "active" ] || fail "升級後學生可回報全螢幕狀態"
+[ "$(psql_ -d $DB10 -c "set role anon" -c "select public.student_report_fullscreen('$SID', '$TA10', 'off', 2)->>'state'" | tail -1)" = "exited" ] || fail "升級後回報退出"
+[ "$(psql_ -d $DB10 -c "select rev from public.session_state where session_id = '$SID'")" = "$RV10" ] || fail "全螢幕回報推進了課程版本"
+[ "$(psql_ -d $DB10 -c "$TEACH" -c "select string_agg(seat_no || ':' || coalesce(fs_state, '-') || ':' || fs_exits, ',' order by seat_no) from public.participants where session_id = '$SID'" | tail -1)" = "4:exited:1,11:-:0" ] || fail "教師讀取全螢幕狀態"
+[ "$(psql_ -d $DB10 -c "set role anon" -c "select (public.group_update_category('$SID', '$TB10', '$GC10', 'reason', '升級後仍可共作', 1))->>'ok'" | tail -1)" != "" ] || fail "升級後小組共作"
+psql_ -d $DB10 -f "$TMP/bundle.sql" >/dev/null 2>&1 && verify_ok $DB10 || fail "全螢幕升級後重複執行 upgrade.sql"
+[ "$(psql_ -d $DB10 -c "select fs_state || ':' || fs_exits || ':' || fs_seq from public.participants where seat_no = 4")" = "exited:1:2" ] || fail "重複執行改動了全螢幕狀態"
+echo "ok - 從已部署的 main（d01b7b3）＋04 進行中的場次升級：資料不變、19 項全過；既有學生為尚未回報；可回報、不推進課程版本；教師可讀；重複執行不改狀態"

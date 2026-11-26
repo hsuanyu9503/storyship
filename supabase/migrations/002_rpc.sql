@@ -62,6 +62,25 @@ end $$;
 -- student_join 增加 p_seat_no 參數：先移除舊的三參數版本（新版第四個參數有預設值，舊版前端以三個參數呼叫仍可使用）
 drop function if exists public.student_join(text, text, int);
 
+-- 學生全螢幕狀態（2026-11-26）：學生裝置回報、教師端在小組成員清單顯示（可重複執行）
+--   存在學生紀錄上，不推進 session_state.rev、不影響分類資料與操作版本。
+--   fs_state：active（全螢幕中）／exited（曾進入、之後退出）／none（尚未進入）／denied（請求未被允許、尚未進入過）／unsupported（裝置不支援）；
+--             null＝尚未回報（舊版前端或剛升級）
+--   fs_seq：裝置端的遞增序號；伺服器只接受比目前更大的序號，延遲送達或重送的舊回報不會覆蓋較新的狀態
+--   fs_at：伺服器接受最後一次回報的時間；fs_ever：這次加入後曾經進入全螢幕；
+--   fs_exits：「全螢幕中 → 已退出」的次數（只增不減），教師端用來判斷是否為新的退出事件（同一次退出只提醒一次）
+alter table public.participants add column if not exists fs_state text;
+alter table public.participants add column if not exists fs_seq bigint;
+alter table public.participants add column if not exists fs_at timestamptz;
+alter table public.participants add column if not exists fs_ever boolean not null default false;
+alter table public.participants add column if not exists fs_exits int not null default 0;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'participants_fs_state_valid') then
+    alter table public.participants add constraint participants_fs_state_valid
+      check (fs_state is null or fs_state in ('active', 'exited', 'none', 'denied', 'unsupported'));
+  end if;
+end $$;
+
 -- 故事卡正式教材（2026-11）：「值得留意的故事元素」（可重複執行；舊資料為空陣列，背面不顯示元素區）
 --   story_cards.elements：字串陣列，依文件順序，例如 ["神奇零食","實現願望"]；只是閱讀提示，不代表分類答案
 alter table public.story_cards add column if not exists elements jsonb not null default '[]'::jsonb;
@@ -408,8 +427,10 @@ begin
     insert into public.personal_boards (participant_id, session_id) values (p.id, s.id);
   else
     -- 被移出後重新加入：用這次輸入的座號（沒有輸入時保留原本的）
+    -- 全螢幕狀態從新開始（序號與退出次數只增不減，保留）
     update public.participants set group_id = g.id, status = 'active', seat_label = g.seat_seq || ' 號',
-           seat_no = coalesce(p_seat_no, seat_no), last_seen_at = now() where id = p.id returning * into p;
+           seat_no = coalesce(p_seat_no, seat_no), last_seen_at = now(),
+           fs_state = null, fs_at = null, fs_ever = false where id = p.id returning * into p;
   end if;
   return jsonb_build_object('session_id', s.id, 'resumed', false, 'seat_no', p.seat_no, 'group_number', g.number);
 end $$;
@@ -446,6 +467,39 @@ begin
       'personal_edit', v_active and st.phase = '03' and not st.editing_paused and b.submitted_at is null
                        and not v_locked,
       'group_edit',    v_active and st.phase = '04' and not st.editing_paused and g.status = 'open'));
+end $$;
+
+-- 學生裝置回報全螢幕狀態（依瀏覽器實際狀態：on／off／denied／unsupported）
+--   身分：裝置憑證必須屬於這個場次（app.participant），且目前在組內；被移出或場次已結束時不更新。
+--   順序：p_seq 必須大於已接受的序號，否則忽略（重送、延遲、順序顛倒的回報不會讓狀態倒退），回傳目前狀態與序號。
+--   off 的意義由伺服器判斷：這次加入後曾進入全螢幕 → exited；否則 none（或 denied）。
+--   只更新該學生自己的一列（含在線時間），不鎖 session_state、不推進任何版本，不影響分類寫入。
+create or replace function public.student_report_fullscreen(p_session uuid, p_token text, p_state text, p_seq bigint)
+returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
+declare p public.participants; s public.sessions; v_new text; v_exit boolean;
+begin
+  if p_state is null or p_state not in ('on', 'off', 'denied', 'unsupported') or p_seq is null or p_seq < 0 then
+    raise exception 'BAD_DATA';
+  end if;
+  p := app.participant(p_session, p_token);
+  select * into p from public.participants where id = p.id for update;
+  select * into s from public.sessions where id = p_session;
+  if p.status <> 'active' or p.group_id is null or s.status <> 'active' then
+    return jsonb_build_object('accepted', false, 'reason', 'INACTIVE', 'state', p.fs_state, 'seq', p.fs_seq);
+  end if;
+  if p.fs_seq is not null and p_seq <= p.fs_seq then
+    return jsonb_build_object('accepted', false, 'reason', 'STALE', 'state', p.fs_state, 'seq', p.fs_seq);
+  end if;
+  v_new := case p_state
+    when 'on' then 'active'
+    when 'unsupported' then 'unsupported'
+    else case when p.fs_ever then 'exited' when p_state = 'denied' then 'denied' else 'none' end end;
+  v_exit := v_new = 'exited' and p.fs_state = 'active';
+  update public.participants
+     set fs_state = v_new, fs_seq = p_seq, fs_at = now(), fs_ever = fs_ever or v_new = 'active',
+         fs_exits = fs_exits + case when v_exit then 1 else 0 end, last_seen_at = now()
+   where id = p.id returning * into p;
+  return jsonb_build_object('accepted', true, 'state', p.fs_state, 'seq', p.fs_seq, 'exits', p.fs_exits);
 end $$;
 
 -- 故事卡：第三環節起才開放（之前的環節學生讀不到任何故事資料）

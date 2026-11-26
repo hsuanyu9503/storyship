@@ -111,7 +111,27 @@ function setError(text) {
   alt.hidden = failed < 2;
 }
 
+// ---------- 回報給教師端：依瀏覽器實際狀態（on／off），加上請求未被允許（denied）與裝置不支援（unsupported） ----------
+//   虛擬鍵盤、視窗大小、輸入框焦點都不影響（只看 fullscreenElement）；打字中延後遮罩時，實際不在全螢幕就回報 off。
+export function fsReportState() {
+  if (!fsSupported()) return 'unsupported';
+  if (fsActive()) return 'on';
+  return failed > 0 ? 'denied' : 'off';
+}
+const listeners = new Set();
+let lastReported = null;
+export function onFsChange(cb) { listeners.add(cb); return () => listeners.delete(cb); }
+function notify() {
+  const st = fsReportState();
+  if (st === lastReported) return;
+  lastReported = st;
+  for (const cb of listeners) { try { cb(st); } catch { /* 回報失敗不影響遮罩 */ } }
+}
+
 export function update() {
+  try { render(); } finally { notify(); }
+}
+function render() {
   if (!dlg) build();
   if (fsActive()) { failed = 0; bypass = false; deferred = false; setError(''); }
   // 不支援全螢幕：不擋畫面，只顯示說明
