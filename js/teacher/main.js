@@ -1,5 +1,6 @@
 // B｜教師主控端：控制教學環節、內容揭露與學生連線。
 import { seatText, bySeat } from '../lib/seat.js';
+import { fsStatus, createExitWatcher, exitMessage } from '../lib/fs-status.js';
 import { makeClient, configured, rpc, errorText } from '../lib/api.js';
 import { createSync } from '../lib/sync.js';
 import { h, mount, toast, confirmDialog } from '../lib/dom.js';
@@ -193,10 +194,45 @@ export function teacherGuide(guide, open = false) {
 // 學生名單（含座號）。資料庫尚未升級（沒有 seat_no 欄位）時改讀舊欄位，教師端仍可使用，座號顯示為「未填座號」
 async function loadPeople(sessionId) {
   const q = (cols) => client.from('participants').select(cols).eq('session_id', sessionId).order('joined_at');
-  const r = await q('id,group_id,seat_label,seat_no,status,joined_at,last_seen_at');
-  if (!r.error) return r;
-  const old = await q('id,group_id,seat_label,status,joined_at,last_seen_at');
-  return old.error ? r : old;
+  const base = 'id,group_id,seat_label,status,joined_at,last_seen_at';
+  let first = null;
+  for (const cols of [base + ',seat_no,fs_state,fs_at,fs_ever,fs_exits,fs_typing', base + ',seat_no', base]) {   // 資料庫尚未升級時退回舊欄位
+    const r = await q(cols);
+    if (!r.error) return r;
+    first ||= r;
+  }
+  return first;
+}
+
+// ---------- 學生全螢幕狀態（裝置回報） ----------
+let fsWatch = createExitWatcher(); let fsWatchSid = null;
+function fsBadge(p, { time = false } = {}) {
+  const st = fsStatus(p, isOnline(p));
+  const t = p.fs_at ? new Date(p.fs_at).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : null;
+  return [h('span.fs-tag.' + st.cls, { 'data-fs': st.key, title: t ? `最後回報 ${t}` : '尚未回報' }, st.text),
+    time ? h('span.fs-time', t ? (st.key === 'stale' ? `最後回報 ${t}` : `更新 ${t}`) : '—') : null];
+}
+// 座號＋狀態（02 加入狀態、04 小組進度的精簡清單）
+function seatsWithFs(list) {
+  return h('span.seats', list.map((p, i) => [i ? '、' : '', h('span.seat-fs', h('span.seat-n', seatText(p)), ' ', fsBadge(p))]));
+}
+// 退出提醒：不打斷操作、不需關閉、沒有音效；短時間內多位學生退出時彙整成一則
+let fsAlertBuf = []; let fsAlertShown = []; let fsAlertTimer = null; let fsHideTimer = null; let fsAlertEl = null;
+function queueExitAlerts(list) {
+  if (!list.length) return;
+  fsAlertBuf.push(...list);
+  clearTimeout(fsAlertTimer);
+  fsAlertTimer = setTimeout(showExitAlert, 800);
+}
+function showExitAlert() {
+  if (!fsAlertEl) { fsAlertEl = h('div.fs-alert', { role: 'status', 'aria-live': 'polite', hidden: true }); document.body.append(fsAlertEl); }
+  const merged = new Map((fsAlertEl.hidden ? [] : fsAlertShown).map((x) => [x.id, x]));
+  for (const x of fsAlertBuf) merged.set(x.id, x);
+  fsAlertBuf = []; fsAlertShown = [...merged.values()];
+  fsAlertEl.textContent = exitMessage(fsAlertShown);
+  fsAlertEl.hidden = false;
+  clearTimeout(fsHideTimer);
+  fsHideTimer = setTimeout(() => { fsAlertEl.hidden = true; fsAlertShown = []; }, 6000);
 }
 
 async function loadLive(sessionId) {
@@ -216,6 +252,9 @@ async function loadLive(sessionId) {
   S.state = st.data;
   S.groups = groups.data;
   S.people = people.data.slice().sort(bySeat);
+  // 學生退出全螢幕的提醒（只提醒新的退出事件；第一次讀取只記錄基準）
+  if (fsWatchSid !== sessionId) { fsWatchSid = sessionId; fsWatch = createExitWatcher(); }
+  queueExitAlerts(fsWatch(S.people, (p) => S.groups.find((g) => g.id === p.group_id)?.name || ''));
   S.personal = {
     boards: boards.data.length,
     submitted: boards.data.filter((b) => b.submitted_at).length,
@@ -322,7 +361,7 @@ function renderAll(force = false) {
   if (changed('head', [st.rev, S.session.status, S.session.join_open, S.sync?.status])) renderHead();
   if (changed('steps', [st.phase, S.session.status])) renderSteps();
   if (changed('panel', [st.rev, S.session.join_open, S.session.status, S.genrePreview,
-    S.groups.map((g) => [g.status, g.board_rev]), S.people.length, onlineCount(S.people), S.people.map((p) => [p.id, p.group_id, p.status, p.seat_no]), (S.groupSnaps || []).length,
+    S.groups.map((g) => [g.status, g.board_rev]), S.people.length, onlineCount(S.people), S.people.map((p) => [p.id, p.group_id, p.status, p.seat_no, p.fs_state, p.fs_at, isOnline(p)]), (S.groupSnaps || []).length,
     S.state.phase === '04' ? S.groups.map((g) => onlineCount(S.people.filter((p) => p.group_id === g.id))) : 0,
     S.personal.boards, S.personal.submitted, S.personal.digest, S.personal.snapshots, [...S.ppOpen],
     S.results?.key(), st.stage_ctl, st.disclosure, (S.groupSnaps || []).map((x) => x.id),
@@ -531,7 +570,7 @@ const PANELS = {
       h('div.ready-row', S.groups.map((g) => {
         const m = active.filter((p) => p.group_id === g.id);
         return h('div.ready-cell' + (m.length ? '.ok' : ''), h('b', g.name), h('span', `${onlineCount(m)}/${m.length} 在線`),
-          m.length ? h('span.seats', m.map(seatText).join('、')) : null);
+          m.length ? seatsWithFs(m) : null);
       })),
       h('div.btn-grid',
         onScreenQr
@@ -670,10 +709,11 @@ function panelPersonal() {
         if (!open) return [head];
         return [head, h('tr.pp-detail', h('td', { colspan: 4 }, gr.length === 0 ? h('p.muted.small', '尚無學生') :
           h('table.pp-people',
-            h('thead', h('tr', h('th', '座號'), h('th', '連線'), h('th', '已分類'), h('th', '狀態'), h('th', '最後儲存'), h('th', ''))),
+            h('thead', h('tr', h('th', '座號'), h('th', '連線'), h('th', '全螢幕'), h('th', '已分類'), h('th', '狀態'), h('th', '最後儲存'), h('th', ''))),
             h('tbody', gr.map((r) => h('tr',
               h('td', seatText(r.p)),
               h('td', h('span.dot' + (isOnline(r.p) ? '.on' : '')), isOnline(r.p) ? ' 在線' : ' 離線'),
+              h('td.pp-fs', fsBadge(r.p, { time: true })),
               h('td', h('span.pp-bar', h('span', { style: { width: (n ? r.placed / n * 100 : 0) + '%' } })), `${r.placed} / ${n}`),
               h('td', statusOf(r)),
               h('td.mono.small', fmtTime(r.b?.updated_at)),
@@ -755,7 +795,7 @@ function panelGroups() {
         h('td', x.used),
         h('td', `${x.reasons}/${x.used}`),
         h('td', x.g.status === 'open' ? h('span.tag', '編輯中') : x.g.status === 'submitted' ? h('span.tag.pub', '已提交') : h('span.tag.warn', '教師結束保存')),
-        h('td.gp-members', `${x.online}/${x.members.length} 在線`, x.members.length ? h('span.seats', x.members.map(seatText).join('、')) : null),
+        h('td.gp-members', `${x.online}/${x.members.length} 在線`, x.members.length ? seatsWithFs(x.members) : null),
         h('td.gp-actions',
           h('button.small', { type: 'button', onclick: () => viewGroup(x.g) }, '查看'),
           x.g.status !== 'open' && !ended ? h('button.small', { type: 'button', onclick: () => reopenGroup(x.g) }, '重新開放') : null))))),
@@ -767,7 +807,7 @@ function panelGroups() {
 // ----------------------------------------------------------------------
 let rosterKey = '';
 function renderRoster() {
-  const key = JSON.stringify([S.groups.map((g) => [g.id, g.capacity, g.name]), S.people.map((p) => [p.id, p.group_id, p.status, p.seat_no, Math.floor((Date.now() - new Date(p.last_seen_at)) / ONLINE_MS)]),
+  const key = JSON.stringify([S.groups.map((g) => [g.id, g.capacity, g.name]), S.people.map((p) => [p.id, p.group_id, p.status, p.seat_no, p.fs_state, p.fs_at, Math.floor((Date.now() - new Date(p.last_seen_at)) / ONLINE_MS)]),
     S.personal.snapshots, S.personal.submitted]);
   if (key === rosterKey || S.els.roster.contains(document.activeElement)) return;
   rosterKey = key;
@@ -782,7 +822,7 @@ function renderRoster() {
         members.length === 0 ? h('p.muted.small', '尚無學生') :
         h('ul.members', members.map((p) => h('li',
           h('span.dot' + (now - new Date(p.last_seen_at) < ONLINE_MS ? '.on' : '')),
-          h('span.seat', seatText(p)),
+          h('span.seat', seatText(p)), h('span.fs-cell', fsBadge(p, { time: true })),
           S.personal.submittedSet?.has(p.id) ? h('span.tag.pub', '個人已提交') : null,
           S.personal.incomplete?.has(p.id) ? h('span.tag.warn', '個人未完成') : null,
           h('select.small', { onchange: async (e) => {

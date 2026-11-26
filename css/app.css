@@ -554,6 +554,22 @@ img.st-match-img { object-fit: contain; background: #e9e5d8; }
 .gp-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
 .gp-members { font-size: .85em; color: var(--muted); }
 .seats { display: block; font-size: .9em; color: var(--ink); line-height: 1.5; }
+/* 學生全螢幕狀態（裝置回報）：顏色＋文字 */
+.fs-tag { display: inline-block; font-size: .78rem; line-height: 1.35; padding: .05em .5em; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; vertical-align: middle; }
+.fs-tag.fs-on { color: #17603a; background: #e1f3e8; border-color: #8fcaa6; }
+.fs-tag.fs-off { color: #a32020; background: #fde8e8; border-color: #e7a3a3; font-weight: 700; }
+.fs-tag.fs-wait, .fs-tag.fs-stale { color: #555d63; background: #eef0f1; border-color: #cfd4d8; }
+.fs-tag.fs-stale { border-style: dashed; }
+.fs-tag.fs-na { color: #4b5560; background: #f3f1ea; border-color: #d6d0bd; }
+.fs-time { font-size: .74rem; color: var(--muted); white-space: nowrap; margin-left: .3em; }
+.fs-cell { display: inline-flex; align-items: center; flex-wrap: wrap; gap: .15em; }
+.seat-fs { white-space: nowrap; display: inline-flex; align-items: center; gap: .2em; }
+.seats .seat-fs .fs-tag { font-size: .72rem; }
+/* 退出提醒：不擋操作（不接收點擊）、自動消失 */
+.fs-alert { position: fixed; left: 16px; bottom: 16px; z-index: 60; max-width: min(420px, calc(100vw - 32px)); padding: .6rem .9rem;
+  background: #fff; color: #7a1717; border: 1px solid #e7a3a3; border-left: 5px solid #c23b3b; border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.16); font-weight: 700; line-height: 1.5; pointer-events: none; }
+.fs-alert[hidden] { display: none; }
 .ready-cell .seats { color: var(--muted); }
 .bd-panel .bd-col-head { display: none; }
 

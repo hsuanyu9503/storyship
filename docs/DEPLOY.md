@@ -159,11 +159,15 @@ python3 -m http.server 8080
 
 在 SQL Editor 貼上並執行 **`supabase/upgrade/upgrade.sql`** 一個檔案即可（內容＝002 → 003，包在單一交易中，最後自動執行檢查）。
 執行中任何錯誤都會全部回復，不會留下半套狀態；可重複執行；不刪除、不修改任何既有資料。
-結果表格的 `ok` 都應為 `true`（18 列）。檢查在 commit 之後執行：若出現 `false`，升級已完成、不會自動回復，請處理後重新執行。修改 002／003 之後，請執行 `bash supabase/upgrade/build.sh` 重新產生此檔。
+結果表格的 `ok` 都應為 `true`（19 列）。檢查在 commit 之後執行：若出現 `false`，升級已完成、不會自動回復，請處理後重新執行。修改 002／003 之後，請執行 `bash supabase/upgrade/build.sh` 重新產生此檔。
+
+### 學生全螢幕狀態（2026-11-26）
+
+先執行 `supabase/upgrade/upgrade.sql`（19 列都應為 `true`），再更新網站並讓所有裝置重新整理。新增 `participants.fs_state` 等欄位與 `student_report_fullscreen`；舊版網站仍相容。詳見 [`FS_STATUS.md`](FS_STATUS.md)。
 
 ### 學生座號（2026-11-26）
 
-先執行 `supabase/upgrade/upgrade.sql`（18 列都應為 `true`），再更新網站並讓所有裝置重新整理。新增 `participants.seat_no`（舊資料為 null）與四參數的 `student_join`；舊版網站仍相容。詳見 [`SEAT_FULLSCREEN.md`](SEAT_FULLSCREEN.md)。
+先執行 `supabase/upgrade/upgrade.sql`（此版本為 18 列；之後的版本列數更多，以檔案說明為準），再更新網站並讓所有裝置重新整理。新增 `participants.seat_no`（舊資料為 null）與四參數的 `student_join`；舊版網站仍相容。詳見 [`SEAT_FULLSCREEN.md`](SEAT_FULLSCREEN.md)。
 
 ### 從 Phase 3 升級到 Phase 4
 
