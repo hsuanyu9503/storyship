@@ -136,8 +136,24 @@ const login = async (email) => (await (await fetch(`${BASE}/auth/v1/token?grant_
     await ime('ㄨㄤˊ', '王');
     ok(await fsIs('第 2 組', '12 號', 'exited'), '打字中裝置確實退出全螢幕：教師端如實顯示「已退出全螢幕」');
     ok(!(await sfs(A)).overlay, '學生端打字中不顯示遮罩（沿用原本行為）');
+    await sleep(2500);
+    ok((await alerts()).length === 1 && (await db(12)).fs_exits === 1, '打字中的退出：教師端不跳提醒（退出次數不增加）');
     await A.locator('.bd-col-title:visible').first().tap();
     ok(await until(async () => (await sfs(A)).inFs) && await fsIs('第 2 組', '12 號', 'active'), '完成輸入後自動返回：學生端全螢幕、教師端恢復綠色');
+    await sleep(1500);
+    ok((await alerts()).length === 1, '自動返回後也沒有提醒');
+    // 打字中退出後，沒有回到全螢幕就離開欄位（例如系統收起鍵盤）：學生端顯示黑底提示，這時才提醒教師一次
+    await A.locator('.bd-cat .bd-name:visible').first().tap(); await A.keyboard.press('End');
+    await A.evaluate(() => document.exitFullscreen()); await sleep(200);
+    await ime('ㄅ', '吧');
+    await sleep(5500);   // 使用者操作授權失效（Playwright 的 evaluate 會帶使用者操作，期間不對學生頁呼叫 evaluate）
+    await cdp.send('Runtime.evaluate', { expression: 'document.activeElement.blur()', userGesture: false });
+    ok(await until(async () => (await sfs(A)).overlay), '離開欄位仍不在全螢幕：學生端黑底提示');
+    ok(await until(async () => (await alerts()).length === 2 && (await alerts())[1] === '第 2 組・12 號退出全螢幕'), `這時才提醒教師一次（${JSON.stringify(await alerts())}）`);
+    await A.locator('.fsx-btn').tap();
+    ok(await fsIs('第 2 組', '12 號', 'active'), '返回後恢復綠色');
+    await sleep(1500);
+    ok((await alerts()).length === 2 && (await db(12)).fs_exits === 2, '整段只多一次提醒（退出次數 2）');
 
     // ======================================================================
     // 4. 重複、延遲、順序顛倒的回報：狀態不倒退、不重複提醒

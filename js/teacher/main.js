@@ -196,7 +196,7 @@ async function loadPeople(sessionId) {
   const q = (cols) => client.from('participants').select(cols).eq('session_id', sessionId).order('joined_at');
   const base = 'id,group_id,seat_label,status,joined_at,last_seen_at';
   let first = null;
-  for (const cols of [base + ',seat_no,fs_state,fs_at,fs_ever,fs_exits', base + ',seat_no', base]) {   // 資料庫尚未升級時退回舊欄位
+  for (const cols of [base + ',seat_no,fs_state,fs_at,fs_ever,fs_exits,fs_typing', base + ',seat_no', base]) {   // 資料庫尚未升級時退回舊欄位
     const r = await q(cols);
     if (!r.error) return r;
     first ||= r;

@@ -32,7 +32,7 @@ grant select on public.teachers, public.content_sets, public.story_cards, public
                 public.group_placements, public.group_snapshots
    to authenticated;
 grant select (id, session_id, group_id, seat_label, seat_no, status, joined_at, last_seen_at,
-              fs_state, fs_at, fs_ever, fs_exits)
+              fs_state, fs_at, fs_ever, fs_exits, fs_typing)
    on public.participants to authenticated;
 
 -- 重建政策（可重複執行）

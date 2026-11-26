@@ -558,16 +558,26 @@ select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 160)->>'s
 select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 150)->>'reason') = 'STALE', '延遲送達的舊「已退出」（序號較小）：忽略');
 select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'denied', 170)->>'state') = 'exited', '曾進入全螢幕後請求被拒絕：仍是 exited');
 select t.ok((public.student_report_fullscreen(:'fsid', :'tokF2', 'unsupported', 5)->>'state') = 'unsupported', '裝置不支援：unsupported');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 180)->>'state') = 'active', '（打字）先回到全螢幕');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'typing', 181)->>'exits')::int = 2, '打字中退出：狀態為已退出，但不計入退出次數（不提醒）');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'typing', 182)->>'exits')::int = 2, '打字中再次回報：不計入');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 183)->>'exits')::int = 3, '打字中退出後離開欄位仍不在全螢幕：計入一次（提醒）');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 184)->>'exits')::int = 3, '之後重複回報已退出：不再計入');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'typing', 185)->>'exits')::int = 3, '已退出（非打字）後又進入打字：不計入');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 1855)->>'exits')::int = 3, '已提醒過的退出期間在打字與非打字之間切換：不重複計入');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 1860)->>'state') = 'active', '返回全螢幕');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'typing', 1870)->>'exits')::int = 3 and (public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 1880)->>'exits')::int = 3, '打字中退出後自動返回：整段不計入');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'denied', 1890)->>'exits')::int = 4, '從全螢幕中變成請求被拒絕（不在全螢幕）：計入');
 select t.raises(format($$update public.participants set fs_state = 'active' where session_id = %L$$, :'fsid'), 'DENIED', '學生不能直接改寫全螢幕狀態');
 select t.raises(format($$select fs_state from public.participants where session_id = %L$$, :'fsid'), 'DENIED', '學生不能直接讀取全螢幕狀態');
 reset role;
-select t.ok((select fs_exits from public.participants where session_id = :'fsid' and seat_no = 3) = 2, '退出次數只計「全螢幕中 → 已退出」：2 次（重送、重複回報、延遲訊息、被拒絕都不計）');
-select t.ok((select fs_seq from public.participants where session_id = :'fsid' and seat_no = 3) = 170, '已接受的最大序號 170');
+select t.ok((select fs_exits from public.participants where session_id = :'fsid' and seat_no = 3) = 4, '退出次數只計要提醒的退出：4 次（重送、重複回報、延遲訊息、打字中的退出都不計）');
+select t.ok((select fs_seq from public.participants where session_id = :'fsid' and seat_no = 3) = 1890, '已接受的最大序號 1890');
 select t.ok((select rev from public.session_state where session_id = :'fsid') = :frev0, '全螢幕回報不推進課程操作版本');
 select t.ok((select rev from public.personal_boards b join public.participants p on p.id = b.participant_id where p.session_id = :'fsid' and p.seat_no = 3) = 0, '全螢幕回報不影響個人分類版本');
 set role authenticated;
 select set_config('request.jwt.claim.sub', :'T1', false) as _ \gset
-select t.ok((select string_agg(seat_no || ':' || fs_state || ':' || fs_exits, ',' order by seat_no) from public.participants where session_id = :'fsid') = '3:exited:2,9:unsupported:0', '教師可讀取自己場次的全螢幕狀態');
+select t.ok((select string_agg(seat_no || ':' || fs_state || ':' || fs_exits, ',' order by seat_no) from public.participants where session_id = :'fsid') = '3:exited:4,9:unsupported:0', '教師可讀取自己場次的全螢幕狀態');
 select t.raises(format($$update public.participants set fs_state = 'active' where session_id = %L$$, :'fsid'), 'DENIED', '教師不能直接改寫全螢幕狀態');
 select set_config('request.jwt.claim.sub', :'T3', false) as _ \gset
 select t.ok((select count(*) from public.participants where session_id = :'fsid') = 0, '其他教師讀不到這個場次的全螢幕狀態');
@@ -576,11 +586,11 @@ select id as "pF1" from public.participants where session_id = :'fsid' and seat_
 select public.teacher_remove_participant(:'pF1') is null as x \gset
 reset role;
 set role anon;
-select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 200)->>'reason') = 'INACTIVE', '被移出後的回報不更新');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'on', 2000)->>'reason') = 'INACTIVE', '被移出後的回報不更新');
 select t.ok((public.student_join(:'fcode', :'tokF1', 1, 3)->>'resumed')::boolean = false, '被移出後重新加入');
-select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 210)->>'state') = 'none', '重新加入後重新開始：還沒進入過全螢幕時為 none');
+select t.ok((public.student_report_fullscreen(:'fsid', :'tokF1', 'off', 2100)->>'state') = 'none', '重新加入後重新開始：還沒進入過全螢幕時為 none');
 reset role;
-select t.ok((select fs_exits from public.participants where session_id = :'fsid' and seat_no = 3) = 2, '重新加入後退出次數保留（只增不減，教師端不會誤判）');
+select t.ok((select fs_exits from public.participants where session_id = :'fsid' and seat_no = 3) = 4, '重新加入後退出次數保留（只增不減，教師端不會誤判）');
 delete from public.sessions where id in (:'fsid', :'fsid2');
 
 \pset tuples_only off

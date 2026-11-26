@@ -102,7 +102,7 @@ select '18. 學生座號：欄位與範圍檢查存在、加入函式可帶座�
 union all
 select '19. 學生全螢幕狀態：欄位與檢查存在、回報函式學生可執行、教師可讀不可改、學生不能直接讀寫',
        (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'participants'
-          and column_name in ('fs_state', 'fs_seq', 'fs_at', 'fs_ever', 'fs_exits')) = 5
+          and column_name in ('fs_state', 'fs_seq', 'fs_at', 'fs_ever', 'fs_exits', 'fs_typing')) = 6
        and exists (select 1 from pg_constraint where conname = 'participants_fs_state_valid')
        and to_regprocedure('public.student_report_fullscreen(uuid,text,text,bigint)') is not null
        and has_function_privilege('anon', 'public.student_report_fullscreen(uuid,text,text,bigint)', 'execute')

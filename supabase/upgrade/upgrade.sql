@@ -83,6 +83,8 @@ alter table public.participants add column if not exists fs_seq bigint;
 alter table public.participants add column if not exists fs_at timestamptz;
 alter table public.participants add column if not exists fs_ever boolean not null default false;
 alter table public.participants add column if not exists fs_exits int not null default 0;
+--   fs_typing：最後一次的「已退出」發生在學生打字時（焦點在文字欄位；iPad 打字時系統會退出全螢幕）。打字中的退出不計入 fs_exits（不提醒教師）
+alter table public.participants add column if not exists fs_typing boolean not null default false;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'participants_fs_state_valid') then
     alter table public.participants add constraint participants_fs_state_valid
@@ -478,7 +480,7 @@ begin
       'group_edit',    v_active and st.phase = '04' and not st.editing_paused and g.status = 'open'));
 end $$;
 
--- 學生裝置回報全螢幕狀態（依瀏覽器實際狀態：on／off／denied／unsupported）
+-- 學生裝置回報全螢幕狀態（依瀏覽器實際狀態：on／off／typing（打字中不在全螢幕）／denied／unsupported）
 --   身分：裝置憑證必須屬於這個場次（app.participant），且目前在組內；被移出或場次已結束時不更新。
 --   順序：p_seq 必須大於已接受的序號，否則忽略（重送、延遲、順序顛倒的回報不會讓狀態倒退），回傳目前狀態與序號。
 --   off 的意義由伺服器判斷：這次加入後曾進入全螢幕 → exited；否則 none（或 denied）。
@@ -487,7 +489,7 @@ create or replace function public.student_report_fullscreen(p_session uuid, p_to
 returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare p public.participants; s public.sessions; v_new text; v_exit boolean;
 begin
-  if p_state is null or p_state not in ('on', 'off', 'denied', 'unsupported') or p_seq is null or p_seq < 0 then
+  if p_state is null or p_state not in ('on', 'off', 'typing', 'denied', 'unsupported') or p_seq is null or p_seq < 0 then
     raise exception 'BAD_DATA';
   end if;
   p := app.participant(p_session, p_token);
@@ -503,9 +505,12 @@ begin
     when 'on' then 'active'
     when 'unsupported' then 'unsupported'
     else case when p.fs_ever then 'exited' when p_state = 'denied' then 'denied' else 'none' end end;
-  v_exit := v_new = 'exited' and p.fs_state = 'active';
+  -- 要提醒教師的退出：從全螢幕中退出，或打字中退出後學生離開了文字欄位仍不在全螢幕；打字中的退出不提醒
+  v_exit := v_new = 'exited' and p_state <> 'typing'
+            and (p.fs_state = 'active' or (p.fs_state = 'exited' and p.fs_typing));
   update public.participants
      set fs_state = v_new, fs_seq = p_seq, fs_at = now(), fs_ever = fs_ever or v_new = 'active',
+         fs_typing = v_new = 'exited' and p_state = 'typing' and (p.fs_state = 'active' or p.fs_typing),   -- 已提醒過的退出不再重新計算
          fs_exits = fs_exits + case when v_exit then 1 else 0 end, last_seen_at = now()
    where id = p.id returning * into p;
   return jsonb_build_object('accepted', true, 'state', p.fs_state, 'seq', p.fs_seq, 'exits', p.fs_exits);
@@ -1483,7 +1488,7 @@ grant select on public.teachers, public.content_sets, public.story_cards, public
                 public.group_placements, public.group_snapshots
    to authenticated;
 grant select (id, session_id, group_id, seat_label, seat_no, status, joined_at, last_seen_at,
-              fs_state, fs_at, fs_ever, fs_exits)
+              fs_state, fs_at, fs_ever, fs_exits, fs_typing)
    on public.participants to authenticated;
 
 -- 重建政策（可重複執行）
@@ -1683,7 +1688,7 @@ select '18. 學生座號：欄位與範圍檢查存在、加入函式可帶座�
 union all
 select '19. 學生全螢幕狀態：欄位與檢查存在、回報函式學生可執行、教師可讀不可改、學生不能直接讀寫',
        (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'participants'
-          and column_name in ('fs_state', 'fs_seq', 'fs_at', 'fs_ever', 'fs_exits')) = 5
+          and column_name in ('fs_state', 'fs_seq', 'fs_at', 'fs_ever', 'fs_exits', 'fs_typing')) = 6
        and exists (select 1 from pg_constraint where conname = 'participants_fs_state_valid')
        and to_regprocedure('public.student_report_fullscreen(uuid,text,text,bigint)') is not null
        and has_function_privilege('anon', 'public.student_report_fullscreen(uuid,text,text,bigint)', 'execute')

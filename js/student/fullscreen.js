@@ -112,11 +112,13 @@ function setError(text) {
 }
 
 // ---------- 回報給教師端：依瀏覽器實際狀態（on／off），加上請求未被允許（denied）與裝置不支援（unsupported） ----------
-//   虛擬鍵盤、視窗大小、輸入框焦點都不影響（只看 fullscreenElement）；打字中延後遮罩時，實際不在全螢幕就回報 off。
+//   虛擬鍵盤、視窗大小、輸入框焦點都不影響（只看 fullscreenElement）；打字中延後遮罩時，實際不在全螢幕就回報 typing。
 export function fsReportState() {
   if (!fsSupported()) return 'unsupported';
   if (fsActive()) return 'on';
-  return failed > 0 ? 'denied' : 'off';
+  if (failed > 0) return 'denied';
+  // 打字中不在全螢幕（遮罩延後、或完成輸入時正在自動重新進入）：教師端照樣顯示已退出，但不提醒
+  return deferred || autoPending ? 'typing' : 'off';
 }
 const listeners = new Set();
 let lastReported = null;
